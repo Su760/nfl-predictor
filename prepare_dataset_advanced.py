@@ -326,6 +326,7 @@ def compute_qb_features(raw_weekly):
             )
         
         qb_features_list.append(qb_games[['recent_team', 'season', 'week', 'player_id', 'player_display_name',
+                                          'attempts',
                                           'qb_epa_trend_3', 'qb_epa_trend_5',
                                           'qb_completion_pct_3', 'qb_completion_pct_5',
                                           'qb_sack_rate_3', 'qb_sack_rate_5']])
@@ -334,10 +335,13 @@ def compute_qb_features(raw_weekly):
     
     # Get the starting QB for each team-game (QB with most attempts in that game)
     # If multiple QBs, use the one with most attempts
-    qb_starters = qb_features.sort_values(['recent_team', 'season', 'week', 'player_id']).groupby(
-        ['recent_team', 'season', 'week']
-    ).first().reset_index()
-    
+    qb_starters = qb_features.sort_values(
+        ['recent_team', 'season', 'week', 'attempts'],
+        ascending=[True, True, True, False]
+    ).groupby(['recent_team', 'season', 'week']).first().reset_index()
+    # Drop attempts — only needed for sorting, not a downstream feature
+    qb_starters = qb_starters.drop(columns=['attempts'], errors='ignore')
+
     print(f"    Computed QB features for {len(qb_starters)} team-games")
     
     return qb_starters

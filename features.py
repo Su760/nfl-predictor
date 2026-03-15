@@ -578,7 +578,7 @@ def add_betting_features(df):
         df['home_moneyline'] = pd.to_numeric(df['home_moneyline'], errors='coerce')
         # Convert to probability
         df['ml_prob_home'] = df['home_moneyline'].apply(
-            lambda x: (-x / (-x + 100)) if x > 0 else (100 / (100 - x)) if x < 0 else 0.5
+            lambda x: (100 / (x + 100)) if x > 0 else (-x / (-x + 100)) if x < 0 else 0.5
         )
     else:
         df['ml_prob_home'] = 0.5
@@ -593,14 +593,14 @@ def add_matchup_features(df):
     home_cols = [c for c in df.columns if c.startswith('home_') and not c.startswith('home_team')]
     away_cols = [c.replace('home_', 'away_') for c in home_cols]
     
-    # Create difference features
+    # Create difference features (numeric columns only)
     for home_col in home_cols:
         away_col = home_col.replace('home_', 'away_')
-        if away_col in df.columns:
+        if away_col in df.columns and pd.api.types.is_numeric_dtype(df[home_col]) and pd.api.types.is_numeric_dtype(df[away_col]):
             # Home - Away difference
             diff_col = home_col.replace('home_', 'diff_')
             df[diff_col] = df[home_col] - df[away_col]
-            
+
             # Absolute difference
             abs_col = diff_col.replace('diff_', 'abs_diff_')
             df[abs_col] = (df[home_col] - df[away_col]).abs()

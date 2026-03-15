@@ -26,14 +26,36 @@ def load_model(model_path="model_ensemble.joblib"):
 
 def load_upcoming_games(year=None, week=None):
     """
-    Load upcoming games to predict.
-    For now, returns None - this would need to be implemented to fetch actual schedule.
-    In production, this would fetch from NFL API or schedule CSV.
+    Load upcoming games using nfl_data_py schedule data.
+    Filters for games that have not yet been played (no result).
     """
+    from datetime import date
+    try:
+        import nfl_data_py as nfl
+    except ImportError:
+        print("  Error: nfl_data_py not installed. Run: pip install nfl-data-py")
+        return None
+
     print("\nLoading upcoming games...")
-    print("  Note: This is a placeholder - implement actual schedule loading")
-    print("  For now, returns None. Implement schedule fetching as needed.")
-    return None
+    if year is None:
+        year = date.today().year
+
+    schedule = nfl.import_schedules([year])
+
+    # Upcoming games have no result yet
+    upcoming = schedule[schedule['result'].isna()].copy()
+
+    if week is not None:
+        upcoming = upcoming[upcoming['week'] == week]
+
+    if len(upcoming) == 0:
+        label = f"{year}" + (f" week {week}" if week else "")
+        print(f"  No upcoming games found for {label}")
+        return None
+
+    upcoming = upcoming.rename(columns={'gameday': 'date'})
+    print(f"  Found {len(upcoming)} upcoming games")
+    return upcoming[['season', 'week', 'home_team', 'away_team', 'date']].reset_index(drop=True)
 
 def prepare_game_features(game_row, bundle, featurized_data=None):
     """
@@ -67,13 +89,25 @@ def prepare_game_features(game_row, bundle, featurized_data=None):
             if len(home_games) > 0 and len(away_games) > 0:
                 home_recent = home_games.iloc[-1]
                 away_recent = away_games.iloc[-1]
-                
-                # Extract features
+
+                # Track whether the team was home or away in their most recent game,
+                # so we can read the right-prefixed column from the historical row.
+                home_was_home = featurized_data.loc[home_recent.name, 'home_team'] == home_team \
+                    if home_recent.name in featurized_data.index else True
+                away_was_home = featurized_data.loc[away_recent.name, 'home_team'] == away_team \
+                    if away_recent.name in featurized_data.index else True
+
+                # Extract features using direct column lookup (no prefix stripping)
                 for feat in features:
-                    if feat.startswith('home_') and feat.replace('home_', '') in home_recent.index:
-                        feature_dict[feat] = home_recent[feat.replace('home_', '')]
-                    elif feat.startswith('away_') and feat.replace('away_', '') in away_recent.index:
-                        feature_dict[feat] = away_recent[feat.replace('away_', '')]
+                    if feat.startswith('home_'):
+                        # Map to whichever side this team played as in their last game
+                        col = feat if home_was_home else feat.replace('home_', 'away_')
+                        if col in home_recent.index:
+                            feature_dict[feat] = home_recent[col]
+                    elif feat.startswith('away_'):
+                        col = feat if away_was_home else feat.replace('away_', 'home_')
+                        if col in away_recent.index:
+                            feature_dict[feat] = away_recent[col]
                     elif feat in home_recent.index:
                         feature_dict[feat] = home_recent[feat]
         
