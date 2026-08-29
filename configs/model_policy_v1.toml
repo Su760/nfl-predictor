@@ -1,0 +1,26 @@
+policy_version = "model-v1"
+random_seed = 42
+
+[elo]
+initial = 1505.0
+home_field_points = 65.0
+k_factor = 20.0
+offseason_retention = 0.6666666666666666
+logistic_scale = 400.0
+mov_denominator = 2.2
+mov_rating_scale = 0.001
+
+[massey]
+home_field_points = 2.5
+
+[epa]
+ridge_alpha = 10.0
+
+[logistic]
+c = 1.0
+max_iter = 2000
+
+[calibration]
+sigmoid_c = 1.0
+selection_tolerance = 0.0001
+logit_epsilon = 1e-15
