@@ -48,18 +48,17 @@ class EloRater:
         self.ratings[game.away_team] = self.rating(game.away_team) - change
 
     def snapshot(self, games: list[CompletedGame], cutoff: datetime) -> RatingSnapshot:
+        eligible = [game for game in games if game.finalized_at_utc < cutoff]
         self.ratings = {
             team: self.initial
             for team in sorted(
-                {team for game in games for team in (game.home_team, game.away_team)}
+                {team for game in eligible for team in (game.home_team, game.away_team)}
             )
         }
         current_season: int | None = None
         for game in sorted(
-            games, key=lambda item: (item.season, item.finalized_at_utc, item.canonical_event_id)
+            eligible, key=lambda item: (item.season, item.finalized_at_utc, item.canonical_event_id)
         ):
-            if game.finalized_at_utc >= cutoff:
-                continue
             if current_season is not None and game.season != current_season:
                 self.ratings = {
                     team: self.initial + (rating - self.initial) * self.offseason_retention

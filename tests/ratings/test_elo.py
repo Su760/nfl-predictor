@@ -1,3 +1,4 @@
+import math
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -24,7 +25,27 @@ def test_equal_teams_home_probability_matches_65_point_hfa() -> None:
     )
 
 
-def test_snapshot_ignores_game_finalized_after_cutoff() -> None:
+def test_elo_update_matches_closed_form_margin_of_victory_change() -> None:
+    rater = _rater()
+    game = CompletedGame(
+        canonical_event_id="sea-ne-neutral",
+        season=2026,
+        home_team="SEA",
+        away_team="NE",
+        home_score=7,
+        away_score=0,
+        neutral_site=True,
+        finalized_at_utc=datetime(2026, 9, 1, tzinfo=UTC),
+    )
+
+    rater.update(game)
+
+    change = 20.0 * math.log(8.0) * 0.5
+    assert rater.rating("SEA") == pytest.approx(1505.0 + change)
+    assert rater.rating("NE") == pytest.approx(1505.0 - change)
+
+
+def test_snapshot_does_not_preseed_teams_from_game_finalized_at_cutoff() -> None:
     cutoff = datetime(2026, 9, 1, tzinfo=UTC)
     future = CompletedGame(
         canonical_event_id="future",
@@ -34,13 +55,51 @@ def test_snapshot_ignores_game_finalized_after_cutoff() -> None:
         home_score=30,
         away_score=10,
         neutral_site=False,
-        finalized_at_utc=cutoff + timedelta(seconds=1),
+        finalized_at_utc=cutoff,
     )
 
     snapshot = _rater().snapshot([future], cutoff)
 
-    assert snapshot.values["SEA"] == 1505.0
-    assert snapshot.values["NE"] == 1505.0
+    assert snapshot.values == {}
+
+
+def test_snapshot_is_invariant_to_future_team_identity_mutation() -> None:
+    cutoff = datetime(2026, 9, 1, tzinfo=UTC)
+    completed = CompletedGame(
+        canonical_event_id="completed",
+        season=2026,
+        home_team="SEA",
+        away_team="NE",
+        home_score=24,
+        away_score=17,
+        neutral_site=False,
+        finalized_at_utc=cutoff - timedelta(seconds=1),
+    )
+    future = CompletedGame(
+        canonical_event_id="future",
+        season=2026,
+        home_team="SEA",
+        away_team="NE",
+        home_score=99,
+        away_score=0,
+        neutral_site=False,
+        finalized_at_utc=cutoff,
+    )
+    changed_future = CompletedGame(
+        canonical_event_id="future",
+        season=2026,
+        home_team="DAL",
+        away_team="MIA",
+        home_score=0,
+        away_score=99,
+        neutral_site=True,
+        finalized_at_utc=cutoff,
+    )
+
+    baseline = _rater().snapshot([completed], cutoff)
+
+    assert _rater().snapshot([completed, future], cutoff) == baseline
+    assert _rater().snapshot([completed, changed_future], cutoff) == baseline
 
 
 def test_snapshot_regresses_inactive_franchise_before_new_season_game() -> None:

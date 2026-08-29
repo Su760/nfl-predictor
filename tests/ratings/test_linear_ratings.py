@@ -21,38 +21,60 @@ def completed_game() -> CompletedGame:
     )
 
 
-def test_two_team_colley_and_massey_rank_winner_higher(completed_game: CompletedGame) -> None:
-    assert colley_ratings([completed_game])[completed_game.home_team] > 0.5
-
-    ratings = massey_ratings([completed_game], home_field_points=2.5)
-
-    assert ratings[completed_game.home_team] > ratings[completed_game.away_team]
-
-
-def test_massey_singular_early_season_solution_is_zero_sum_and_deterministic(
+def test_two_team_colley_and_massey_match_closed_form_solution(
     completed_game: CompletedGame,
 ) -> None:
-    ratings = massey_ratings([completed_game], home_field_points=2.5)
+    colley = colley_ratings([completed_game])
+    massey = massey_ratings([completed_game], home_field_points=2.5)
 
-    assert list(ratings) == ["NE", "SEA"]
+    assert colley == pytest.approx({"NE": 3.0 / 8.0, "SEA": 5.0 / 8.0})
+    assert massey == pytest.approx({"NE": -5.75, "SEA": 5.75})
+
+
+def test_massey_disconnected_early_season_solution_is_zero_sum_and_deterministic() -> None:
+    finalized = datetime(2026, 9, 10, tzinfo=UTC)
+    games = [
+        CompletedGame("sea-ne", 2026, "SEA", "NE", 10, 0, True, finalized),
+        CompletedGame("chi-dal", 2026, "CHI", "DAL", 6, 0, True, finalized),
+    ]
+
+    ratings = massey_ratings(games, home_field_points=2.5)
+
+    assert list(ratings) == ["CHI", "DAL", "NE", "SEA"]
     assert sum(ratings.values()) == pytest.approx(0.0)
-    assert ratings == massey_ratings([completed_game], home_field_points=2.5)
+    assert ratings == pytest.approx({"CHI": 3.0, "DAL": -3.0, "NE": -5.0, "SEA": 5.0})
+    assert ratings == massey_ratings(games, home_field_points=2.5)
 
 
-def test_linear_ratings_ignore_games_finalized_after_cutoff(completed_game: CompletedGame) -> None:
+def test_linear_ratings_ignore_future_mutations_at_cutoff(completed_game: CompletedGame) -> None:
     cutoff = completed_game.finalized_at_utc + timedelta(hours=1)
     future = CompletedGame(
         canonical_event_id="future",
         season=2026,
-        home_team="NE",
-        away_team="SEA",
+        home_team="DAL",
+        away_team="MIA",
         home_score=99,
         away_score=0,
         neutral_site=False,
-        finalized_at_utc=cutoff + timedelta(seconds=1),
+        finalized_at_utc=cutoff,
+    )
+    changed_future = CompletedGame(
+        canonical_event_id="future",
+        season=2026,
+        home_team="MIA",
+        away_team="DAL",
+        home_score=0,
+        away_score=99,
+        neutral_site=True,
+        finalized_at_utc=cutoff,
     )
 
-    assert colley_ratings([completed_game, future], cutoff) == colley_ratings([completed_game])
-    assert massey_ratings([completed_game, future], 2.5, cutoff) == pytest.approx(
-        massey_ratings([completed_game], 2.5)
+    baseline_colley = colley_ratings([completed_game], cutoff)
+    baseline_massey = massey_ratings([completed_game], 2.5, cutoff)
+
+    assert colley_ratings([completed_game, future], cutoff) == baseline_colley
+    assert colley_ratings([completed_game, changed_future], cutoff) == baseline_colley
+    assert massey_ratings([completed_game, future], 2.5, cutoff) == pytest.approx(baseline_massey)
+    assert massey_ratings([completed_game, changed_future], 2.5, cutoff) == pytest.approx(
+        baseline_massey
     )
