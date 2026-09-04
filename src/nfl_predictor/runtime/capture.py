@@ -379,6 +379,8 @@ class NflverseFootballNormalizer:
             schedule = schedules.get(game_id)
             if schedule is None:
                 raise ValueError("play-by-play game is missing from schedule context")
+            if _kickoff(schedule) > manifest.response_received_at_utc:
+                raise ValueError("play-by-play row timestamp is after capture receipt")
             if not self._final_schedule(schedule, manifest):
                 continue
             offense = _team(row["posteam"], "posteam")

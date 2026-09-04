@@ -319,6 +319,102 @@ def test_normalize_capture_emits_exact_fact_shapes_and_capture_lineage() -> None
         == {"offense_epa_per_play", "pass_epa_per_play", "rush_epa_per_play", "plays"}
         for fact in by_type["team_game_epa"]
     )
+    assert {
+        fact.provider_record_id: (fact.entity_keys, fact.payload)
+        for fact in by_type["league_strength_prior"]
+    } == {
+        "league:2025": (
+            {"canonical_event_id": "event-2026-02-gb-chi", "season": "2026"},
+            {
+                "elo": 1500.0,
+                "colley": 0.5,
+                "massey": 0.0,
+                "off_epa": 0.0,
+                "def_epa": 0.0,
+                "pass_epa": 0.0,
+                "rush_epa": 0.0,
+            },
+        )
+    }
+    assert {
+        fact.provider_record_id: (fact.entity_keys, fact.payload)
+        for fact in by_type["qb_trailing"]
+    } == {
+        "2025_01_GB_CHI:CHI:qb-chi": (
+            {
+                "canonical_event_id": "2025_REG_01_GB_CHI",
+                "team": "CHI",
+                "player_id": "qb-chi",
+            },
+            {"attempts": 1, "epa_per_play": 0.2, "cpoe": 2.0},
+        ),
+        "2025_01_GB_CHI:GB:qb-gb": (
+            {
+                "canonical_event_id": "2025_REG_01_GB_CHI",
+                "team": "GB",
+                "player_id": "qb-gb",
+            },
+            {"attempts": 1, "epa_per_play": 0.1, "cpoe": 1.0},
+        ),
+        "2026_01_SEA_SF:SEA:qb-sea": (
+            {
+                "canonical_event_id": "2026_REG_01_SEA_SF",
+                "team": "SEA",
+                "player_id": "qb-sea",
+            },
+            {"attempts": 1, "epa_per_play": -0.1, "cpoe": -1.0},
+        ),
+        "2026_01_SEA_SF:SF:qb-sf": (
+            {
+                "canonical_event_id": "2026_REG_01_SEA_SF",
+                "team": "SF",
+                "player_id": "qb-sf",
+            },
+            {"attempts": 1, "epa_per_play": 0.3, "cpoe": 3.0},
+        ),
+    }
+    assert {
+        fact.provider_record_id: (fact.entity_keys, fact.payload)
+        for fact in by_type["team_passing_prior"]
+    } == {
+        "passing:2025:CHI": (
+            {"team": "CHI", "season": "2026"},
+            {"epa_per_play": 0.2, "cpoe": 2.0},
+        ),
+        "passing:2025:GB": (
+            {"team": "GB", "season": "2026"},
+            {"epa_per_play": 0.1, "cpoe": 1.0},
+        ),
+    }
+    assert {
+        fact.provider_record_id: (fact.entity_keys, fact.payload)
+        for fact in by_type["team_strength_prior"]
+    } == {
+        "strength:2025:CHI": (
+            {"team": "CHI", "season": "2026"},
+            {
+                "elo": 1513.862943611199,
+                "colley": 0.625,
+                "massey": 1.5000000000000002,
+                "off_epa": 0.004166666666666667,
+                "def_epa": 0.004166666666666667,
+                "pass_epa": 0.004166666666666667,
+                "rush_epa": 0.0,
+            },
+        ),
+        "strength:2025:GB": (
+            {"team": "GB", "season": "2026"},
+            {
+                "elo": 1486.137056388801,
+                "colley": 0.375,
+                "massey": -1.5000000000000002,
+                "off_epa": -0.004166666666666667,
+                "def_epa": -0.004166666666666667,
+                "pass_epa": -0.004166666666666667,
+                "rush_epa": 0.0,
+            },
+        ),
+    }
     assert all(
         fact.lineage_capture_ids == ("schedule-1",)
         for fact in (*by_type["completed_game"], division)
@@ -628,6 +724,32 @@ def test_nflverse_normalizer_rejects_schedule_timestamp_after_capture_receipt() 
 
     with pytest.raises(ValueError, match="after capture receipt"):
         _normalizer().normalize_facts("schedules", _ipc(schedules), _manifest(), _event())
+
+
+def test_nflverse_normalizer_rejects_non_target_pbp_after_capture_receipt() -> None:
+    schedules = _schedules().with_columns(
+        pl.when(pl.col("game_id") == "2026_01_SEA_SF")
+        .then(pl.lit("2026-09-11"))
+        .otherwise(pl.col("gameday"))
+        .alias("gameday"),
+        pl.when(pl.col("game_id") == "2026_01_SEA_SF")
+        .then(pl.lit(None, dtype=pl.Int64))
+        .otherwise(pl.col("home_score"))
+        .alias("home_score"),
+        pl.when(pl.col("game_id") == "2026_01_SEA_SF")
+        .then(pl.lit(None, dtype=pl.Int64))
+        .otherwise(pl.col("away_score"))
+        .alias("away_score"),
+    )
+
+    with pytest.raises(ValueError, match="after capture receipt"):
+        _normalizer().normalize_capture(
+            _ipc(schedules),
+            _manifest(capture_id="schedule-1"),
+            _ipc(_pbp()),
+            _manifest(capture_id="pbp-1"),
+            _event(),
+        )
 
 
 def test_replay_uses_only_pre_cutoff_archived_capture_batch(capture_fixture: CaptureFixture) -> None:
