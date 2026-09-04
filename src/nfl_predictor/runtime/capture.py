@@ -836,10 +836,7 @@ class OptionalOddsCapture:
             raise
         return CaptureBundle(
             (manifest, *normalized.quotes),
-            {
-                "quote_ids": [quote.quote_id for quote in normalized.quotes],
-                "rejection_codes": [item.reason_code for item in normalized.rejections],
-            },
+            normalized.quotes,
         )
 
     @staticmethod

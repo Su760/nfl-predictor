@@ -1338,11 +1338,12 @@ def test_odds_success_persists_resolvable_manifest_and_every_quote_before_return
     assert budget.successful_finalizations == 1
     assert budget.uncertain_finalizations == 0
     assert manifest.response_headers_allowlisted["x-requests-used"] == "1"
-    assert bundle.payload == {
-        "quote_ids": [quote.quote_id for quote in quotes],
-        "rejection_codes": ["BOOK_NOT_ALLOWLISTED"],
-    }
-    serialized_payload = json.dumps(bundle.payload).encode()
+    assert isinstance(bundle.payload, tuple)
+    assert all(isinstance(quote, MoneylineQuote) for quote in bundle.payload)
+    assert bundle.payload == quotes
+    serialized_payload = json.dumps(
+        [quote.model_dump(mode="json") for quote in bundle.payload]
+    ).encode()
     assert b"test-key" not in serialized_payload
     assert b"secret-provider-detail" not in serialized_payload
 
