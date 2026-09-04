@@ -113,8 +113,12 @@ class DurableLineageRepository:
         facts: Sequence[NormalizedFact],
     ) -> CaptureBatch:
         """Publish capture records atomically at the batch-marker visibility boundary."""
-        manifest_items = tuple(manifests)
-        fact_items = tuple(facts)
+        manifest_items = tuple(
+            CaptureManifest.model_validate(manifest.model_dump()) for manifest in manifests
+        )
+        fact_items = tuple(
+            NormalizedFact.model_validate(fact.model_dump()) for fact in facts
+        )
         self._validated_capture_batch(obligation, attempt_id, manifest_items, fact_items)
         self.append_manifests(manifest_items)
         self.append_facts(fact_items)

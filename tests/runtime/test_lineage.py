@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 import pytest
+from pydantic import ValidationError
 
 from nfl_predictor.contracts.enums import Origin, ProvenanceGrade
 from nfl_predictor.contracts.events import EventVersion, ForecastOrigin
@@ -212,6 +213,39 @@ def test_fact_is_invisible_until_capture_batch_marker_commits(
 
     assert list(runtime_fixture.lineage.iter_facts()) == [fact]
     assert runtime_fixture.lineage.for_event_features(event, runtime_fixture.instant()) == [fact]
+
+
+def test_publication_validates_model_copy_fact_before_any_marker_and_allows_retry(
+    runtime_fixture: RuntimeFixture,
+) -> None:
+    event = runtime_fixture.event()
+    obligation = OriginObligation(
+        event=event,
+        window=event_forecast_origin(event),
+        policy_version="forecast-v1",
+    )
+    manifest = runtime_fixture.manifest()
+    fact = runtime_fixture.fact()
+    invalid = fact.model_copy(
+        update={"input_capture_ids": (fact.capture_id, fact.capture_id)}
+    )
+
+    with pytest.raises(ValidationError, match="input capture IDs"):
+        runtime_fixture.lineage.publish_capture_batch(obligation, "attempt-1", (manifest,), (invalid,))
+
+    assert not runtime_fixture.lineage.ledger.marker_path(
+        "capture-manifest-v1", manifest.capture_id
+    ).exists()
+    assert not runtime_fixture.lineage.ledger.marker_path(
+        "normalized-fact-v1", fact.fact_id
+    ).exists()
+    assert not runtime_fixture.lineage.ledger.marker_path(
+        "capture-batch-v1", f"{obligation.idempotency_key}|attempt-1"
+    ).exists()
+
+    runtime_fixture.lineage.publish_capture_batch(obligation, "attempt-1", (manifest,), (fact,))
+
+    assert list(runtime_fixture.lineage.iter_facts()) == [fact]
 
 
 def test_capture_batch_requires_every_derived_fact_input_capture_manifest(
