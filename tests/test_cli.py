@@ -363,6 +363,25 @@ def test_cli_programmatic_call_does_not_use_process_runtime_config(
     assert result["route"] == "odds.budget-plan"
 
 
+# Catches omitted argv discarding an explicitly injected empty environment.
+def test_cli_omitted_argv_preserves_explicit_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["nfl-predictor", "odds", "budget-plan", "--season", "2026"],
+    )
+    monkeypatch.setenv("NFL_V2_RUNTIME_CONFIG", str(tmp_path / "ambient-only.toml"))
+
+    code = main(environment={}, clock=lambda: NOW)
+
+    assert code == 0
+    assert json.loads(capsys.readouterr().out)["route"] == "odds.budget-plan"
+
+
 @pytest.mark.parametrize("entry", ["module", "console"])
 def test_process_entries_explicitly_use_process_runtime_config(
     entry: str, tmp_path

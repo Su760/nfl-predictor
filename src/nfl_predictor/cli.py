@@ -511,7 +511,14 @@ def main(
     environment: Mapping[str, str] | None = None,
 ) -> int:
     if argv is _PROCESS_ENTRY:
-        return process_main()
+        if (
+            services is None
+            and clock is None
+            and scheduler_policy is None
+            and environment is None
+        ):
+            return process_main()
+        argv = None
     parser = build_parser()
     arguments = parser.parse_args(cast(Sequence[str] | None, argv))
     _validate_task13_arguments(arguments, parser)
