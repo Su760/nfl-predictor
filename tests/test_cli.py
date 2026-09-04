@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 import tomllib
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import get_type_hints
 
 import pytest
@@ -344,17 +348,50 @@ def test_cli_builds_production_services_only_with_explicit_runtime_config(
     assert json.loads(capsys.readouterr().out)["route"] == "readiness.check"
 
 
-# Catches real module/console entry calls ignoring their inherited process environment.
-def test_cli_uses_process_runtime_config_when_no_mapping_is_injected(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
+# Catches an embedding call inheriting unrelated process configuration.
+def test_cli_programmatic_call_does_not_use_process_runtime_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    tree = RuntimeTree(tmp_path)
-    monkeypatch.setenv("NFL_V2_RUNTIME_CONFIG", str(tree.base_config))
-    monkeypatch.setenv(
-        "NFL_V2_ARTIFACT_REGISTRY_SHA256",
-        tree.environment["NFL_V2_ARTIFACT_REGISTRY_SHA256"],
-    )
+    monkeypatch.setenv("NFL_V2_RUNTIME_CONFIG", str(tmp_path / "ambient-only.toml"))
 
-    code = main(["readiness", "check"], clock=lambda: NOW)
+    code = main(["odds", "budget-plan", "--season", "2026"], clock=lambda: NOW)
 
     assert code == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["route"] == "odds.budget-plan"
+
+
+@pytest.mark.parametrize("entry", ["module", "console"])
+def test_process_entries_explicitly_use_process_runtime_config(
+    entry: str, tmp_path
+) -> None:
+    tree = RuntimeTree(tmp_path)
+    environment = {
+        **os.environ,
+        "NFL_V2_RUNTIME_CONFIG": str(tree.base_config),
+        "NFL_V2_ARTIFACT_REGISTRY_SHA256": tree.environment[
+            "NFL_V2_ARTIFACT_REGISTRY_SHA256"
+        ],
+    }
+    command = (
+        [sys.executable, "-m", "nfl_predictor.cli", "readiness", "check"]
+        if entry == "module"
+        else [
+            str(Path(sys.executable).with_name("nfl-predictor")),
+            "readiness",
+            "check",
+        ]
+    )
+
+    completed = subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout)["route"] == "readiness.check"

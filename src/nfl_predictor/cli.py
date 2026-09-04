@@ -495,18 +495,27 @@ def _is_offline_preview(arguments: argparse.Namespace) -> bool:
     return due_preview or route == "odds.budget-plan"
 
 
+class _ProcessEntry:
+    pass
+
+
+_PROCESS_ENTRY = _ProcessEntry()
+
+
 def main(
-    argv: Sequence[str] | None = None,
+    argv: Sequence[str] | None | _ProcessEntry = _PROCESS_ENTRY,
     *,
     services: ServiceRegistry | None = None,
     clock: Callable[[], datetime] | None = None,
     scheduler_policy: SchedulerFreshnessPolicy | None = None,
     environment: Mapping[str, str] | None = None,
 ) -> int:
+    if argv is _PROCESS_ENTRY:
+        return process_main()
     parser = build_parser()
-    arguments = parser.parse_args(argv)
+    arguments = parser.parse_args(cast(Sequence[str] | None, argv))
     _validate_task13_arguments(arguments, parser)
-    active_environment = os.environ if environment is None else environment
+    active_environment = {} if environment is None else environment
     using_offline_services = False
     if services is None:
         runtime_config = (
@@ -549,6 +558,10 @@ def main(
     return 0
 
 
+def process_main() -> int:
+    return main(None, environment=os.environ)
+
+
 def _validate_task13_arguments(
     arguments: argparse.Namespace, parser: argparse.ArgumentParser
 ) -> None:
@@ -583,4 +596,4 @@ def _dispatch_authorization(
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(process_main())

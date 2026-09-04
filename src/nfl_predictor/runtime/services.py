@@ -116,6 +116,20 @@ class ProductionRuntime:
     scheduler_policy: SchedulerFreshnessPolicy
 
 
+@dataclass(frozen=True)
+class _VerifiedDispatchSchedule:
+    events: tuple[EventVersion, ...]
+    active_event_manifest_sha256: str
+    dispatch_manifest_sha256: str
+
+    @property
+    def identity(self) -> tuple[str, str]:
+        return (
+            self.active_event_manifest_sha256,
+            self.dispatch_manifest_sha256,
+        )
+
+
 class _CandidateIds:
     @staticmethod
     def candidate(**values: Any) -> DisplayedQuoteCandidate:
@@ -650,13 +664,13 @@ class RuntimeComponents:
         self, *, season: int, through_week: int, context: ForecastExecutionContext
     ) -> dict[str, object]:
         del context
-        imported_obligations = self._import_missing_forecast_obligations(
-            season, through_week
-        )
         events = tuple(
             event
             for event in self.active_events()
             if event.season == season and event.week <= through_week
+        )
+        imported_obligations = self._import_missing_forecast_obligations(
+            events, season, through_week
         )
         runs = [
             self.outcome_workflow.run(
@@ -675,41 +689,80 @@ class RuntimeComponents:
             "runs": runs,
         }
 
-    def _prospective_execution_keys(self) -> tuple[str, ...]:
-        marker_root = (
-            self.paths.prospective_forecast_root / "commits" / "forecast-terminal-prospective"
-        )
+    def _prospective_record_keys(self, namespace: str) -> tuple[str, ...]:
+        marker_root = self.paths.prospective_forecast_root / "commits" / namespace
         if not marker_root.exists():
             return ()
         keys: list[str] = []
         for marker_path in sorted(marker_root.glob("*.json")):
-            marker = json.loads(marker_path.read_text(encoding="utf-8"))
-            key = marker.get("idempotency_key")
-            if not isinstance(key, str) or not key:
-                raise DataIntegrityError("forecast terminal marker identity is invalid")
+            try:
+                marker = json.loads(marker_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+                raise DataIntegrityError("forecast commit marker is unreadable") from error
+            fields = {"namespace", "idempotency_key", "content_sha256", "object_path"}
+            if (
+                not isinstance(marker, dict)
+                or set(marker) != fields
+                or not all(isinstance(value, str) for value in marker.values())
+            ):
+                raise DataIntegrityError("forecast commit marker fields are invalid")
+            key = marker["idempotency_key"]
+            if (
+                marker["namespace"] != namespace
+                or self.prospective_repository.ledger.marker_path(namespace, key)
+                != marker_path
+                or self.prospective_repository.ledger.read(namespace, key) is None
+            ):
+                raise DataIntegrityError("forecast commit marker identity is substituted")
             keys.append(key)
+        if len(set(keys)) != len(keys):
+            raise DataIntegrityError("duplicate forecast logical record")
         return tuple(keys)
 
+    def _prospective_execution_keys(self) -> tuple[str, ...]:
+        return self._prospective_record_keys("forecast-terminal-prospective")
+
+    def _prospective_obligation_keys(self) -> tuple[str, ...]:
+        return self._prospective_record_keys("forecast-obligation-prospective")
+
     def _import_missing_forecast_obligations(
-        self, season: int, through_week: int
+        self,
+        active_events: tuple[EventVersion, ...],
+        season: int,
+        through_week: int,
     ) -> int:
+        active_by_version = {
+            (event.canonical_event_id, event.event_version): event for event in active_events
+        }
+        if len(active_by_version) != len(active_events):
+            raise DataIntegrityError("active schedule contains duplicate event versions")
         existing = {
             bundle.obligation.execution_key
             for bundle in self.outcome_repository.forecast_obligation_bundles()
         }
         imported = 0
-        for key in self._prospective_execution_keys():
-            graph = self.prospective_repository.load_committed_graph(key)
+        for key in self._prospective_obligation_keys():
+            obligation = self.prospective_repository.load_obligation(key)
+            if obligation is None:
+                raise DataIntegrityError("enumerated forecast obligation is missing")
             if (
-                graph.obligation.event.season != season
-                or graph.obligation.event.week > through_week
-                or graph.obligation.execution_key in existing
+                obligation.event.season != season
+                or obligation.event.week > through_week
             ):
+                continue
+            active_event = active_by_version.get(
+                (obligation.event.canonical_event_id, obligation.event.event_version)
+            )
+            if active_event != obligation.event:
+                raise DataIntegrityError(
+                    "forecast obligation is not bound to the verified active schedule"
+                )
+            if obligation.execution_key in existing:
                 continue
             self.outcome_repository.import_forecast_obligation(
                 self.prospective_repository, key
             )
-            existing.add(graph.obligation.execution_key)
+            existing.add(obligation.execution_key)
             imported += 1
         return imported
 
@@ -768,8 +821,9 @@ class RuntimeComponents:
         del context
         return self.report_workflow.weekly(season, through_week)
 
-    def _verified_dispatch_schedule(self, schedule: Mapping[str, object]) -> str:
-        self.active_events()
+    def _verified_dispatch_schedule(
+        self, schedule: Mapping[str, object]
+    ) -> _VerifiedDispatchSchedule:
         relative_manifest = schedule.get("manifest_path")
         declared_manifest_sha = schedule.get("manifest_sha256")
         active_manifest_sha = schedule.get("active_event_version_manifest_sha256")
@@ -780,6 +834,16 @@ class RuntimeComponents:
             or _SHA256.fullmatch(declared_manifest_sha) is None
         ):
             raise ValueError("dispatch schedule manifest hash is invalid")
+        if (
+            not isinstance(active_manifest_sha, str)
+            or _SHA256.fullmatch(active_manifest_sha) is None
+        ):
+            raise ValueError("active event manifest hash is invalid")
+        events = tuple(
+            self.lineage.load_active_events(
+                self.paths.data_root / "active-events.json", active_manifest_sha
+            )
+        )
         root = self.paths.data_root.resolve(strict=True)
         manifest_path = (root / relative_manifest).resolve(strict=True)
         try:
@@ -798,13 +862,15 @@ class RuntimeComponents:
         if not (
             schedule.get("generated_from_active_event_versions") is True
             and manifest.get("generated_from_active_event_versions") is True
-            and isinstance(active_manifest_sha, str)
-            and _SHA256.fullmatch(active_manifest_sha)
             and manifest.get("active_event_version_manifest_sha256")
             == active_manifest_sha
         ):
             raise ValueError("dispatch schedule is not bound to active event versions")
-        return declared_manifest_sha
+        return _VerifiedDispatchSchedule(
+            events,
+            active_manifest_sha,
+            declared_manifest_sha,
+        )
 
     def odds_budget_plan(
         self, *, season: int, context: ForecastExecutionContext
@@ -864,8 +930,9 @@ class RuntimeComponents:
         ):
             blockers.append("PROJECTED_PAID_USAGE_NONZERO")
         schedule_complete = False
+        verified_schedule: _VerifiedDispatchSchedule | None = None
         try:
-            self._verified_dispatch_schedule(schedule)
+            verified_schedule = self._verified_dispatch_schedule(schedule)
             schedule_complete = True
         except (DataIntegrityError, OSError, TypeError, ValueError):
             blockers.append("ACTIVE_EVENT_VERSION_SCHEDULE_UNAVAILABLE")
@@ -883,6 +950,16 @@ class RuntimeComponents:
             "projected_paid_actions_minutes": plan.projected_paid_actions_minutes,
             "projected_paid_storage_bytes": plan.projected_paid_storage_bytes,
             "schedule_complete": schedule_complete,
+            "active_event_version_manifest_sha256": (
+                None
+                if verified_schedule is None
+                else verified_schedule.active_event_manifest_sha256
+            ),
+            "dispatch_manifest_sha256": (
+                None
+                if verified_schedule is None
+                else verified_schedule.dispatch_manifest_sha256
+            ),
             "zero_dollar_mode": bool(config.get("zero_dollar_mode")),
         }
 
@@ -1013,9 +1090,10 @@ class RuntimeComponents:
         source_repository = str(authorization_config["source_public_repository"])
         default_branch = str(authorization_config["source_default_branch"])
         code_sha = str(authorization_config["approved_public_code_sha"])
-        schedule_sha = self._verified_dispatch_schedule(schedule)
+        verified_schedule = self._verified_dispatch_schedule(schedule)
+        schedule_sha = verified_schedule.dispatch_manifest_sha256
         envelopes = []
-        for cluster in due_clusters(self.active_events(), _as_of(context)):
+        for cluster in due_clusters(verified_schedule.events, _as_of(context)):
             nonce = hashlib.sha256(
                 f"{cluster.cluster_id}|{code_sha}|{schedule_sha}".encode()
             ).hexdigest()
@@ -1036,6 +1114,12 @@ class RuntimeComponents:
         if authorization.target_repository != authorization_config.get("target_private_repository"):
             raise ValueError("dispatch authorization target does not match private configuration")
         budget = self.odds_budget_plan(season=int(config["season"]), context=context)
+        later_schedule_identity = (
+            budget.get("active_event_version_manifest_sha256"),
+            budget.get("dispatch_manifest_sha256"),
+        )
+        if later_schedule_identity != verified_schedule.identity:
+            raise ValueError("dispatch schedule identity changed before live HTTP")
         if not budget["deployment_allowed"]:
             raise ValueError("live dispatch is blocked by deployment gates")
         client = self.clients.repository_dispatch_http_client

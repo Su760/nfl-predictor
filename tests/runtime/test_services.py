@@ -5,6 +5,7 @@ import json
 import shutil
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import polars as pl
@@ -13,8 +14,10 @@ import pytest
 import nfl_predictor.runtime as runtime_module
 import nfl_predictor.runtime.services as services_module
 from nfl_predictor.config import AppConfig
-from nfl_predictor.contracts.events import EventVersion
-from nfl_predictor.runtime.artifacts import VerifiedForecastPredictor
+from nfl_predictor.contracts.enums import Origin
+from nfl_predictor.contracts.events import EventVersion, ForecastOrigin
+from nfl_predictor.identity.origins import OriginObligation
+from nfl_predictor.runtime.artifacts import VerifiedArtifactRegistry, VerifiedForecastPredictor
 from nfl_predictor.runtime.capture import (
     ArrowOutcomeAdapter,
     OptionalOddsCapture,
@@ -24,6 +27,7 @@ from nfl_predictor.runtime.markets import ProductionMarketLayer
 from nfl_predictor.storage import DataIntegrityError, schema_for, write_contracts
 from nfl_predictor.workflows.dispatch import DispatchAuthorization
 from nfl_predictor.workflows.forecast import (
+    ArtifactBinding,
     DurableForecastRepository,
     ForecastExecutionContext,
     ForecastWorkflow,
@@ -225,7 +229,9 @@ class RuntimeTree:
             self.registry_path.read_bytes()
         ).hexdigest()
 
-    def install_due_event(self) -> EventVersion:
+    def install_due_event(
+        self, *, kickoff_at_utc: datetime | None = None
+    ) -> EventVersion:
         event = EventVersion(
             canonical_event_id="event-due",
             event_version=1,
@@ -235,7 +241,7 @@ class RuntimeTree:
             week=1,
             home_team="CHI",
             away_team="GB",
-            kickoff_at_utc=NOW + timedelta(hours=72),
+            kickoff_at_utc=kickoff_at_utc or NOW + timedelta(hours=72),
             venue_id="soldier-field",
             neutral_site=False,
             observed_at_utc=NOW - timedelta(days=7),
@@ -288,7 +294,9 @@ def runtime_tree(tmp_path: Path) -> RuntimeTree:
     return RuntimeTree(tmp_path)
 
 
-def _schedule_frame() -> pl.DataFrame:
+def _schedule_frame(
+    *, home_score: int | None = None, away_score: int | None = None
+) -> pl.DataFrame:
     return pl.DataFrame(
         {
             "game_id": ["2026_01_GB_CHI"],
@@ -299,12 +307,29 @@ def _schedule_frame() -> pl.DataFrame:
             "gametime": ["19:20"],
             "away_team": ["GB"],
             "home_team": ["CHI"],
-            "away_score": [None],
-            "home_score": [None],
+            "away_score": [away_score],
+            "home_score": [home_score],
             "location": ["Home"],
             "div_game": [True],
             "stadium_id": ["soldier-field"],
         }
+    )
+
+
+def _artifact_binding() -> ArtifactBinding:
+    return ArtifactBinding(
+        artifact_id="fixture-champion",
+        origin=Origin.T60,
+        model_role="champion",
+        frozen=True,
+        verified=True,
+        calibrator_artifact_id="fixture-calibrator",
+        model_lane="football_only",
+        feature_policy_version="feature-v1",
+        feature_schema_version="feature-schema-v1",
+        policy_versions=(("calibration", "calibration-v1"), ("model", "model-v1")),
+        market_policy_version="odds-v1",
+        candidate_policy_version="candidate-v1",
     )
 
 
@@ -518,6 +543,99 @@ def test_schedule_sync_rejects_tampered_existing_candidate_bytes(
         runtime.services.schedule_sync(season=2026, context=runtime_tree.context)
 
 
+# Catches outcome state mutation before the active schedule is verified.
+def test_outcomes_sync_verifies_active_schedule_before_importing_obligations(
+    runtime_tree: RuntimeTree, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    event = runtime_tree.install_due_event()
+    runtime = runtime_tree.runtime()
+    components = runtime.services.outcomes_sync.__self__
+    obligation = OriginObligation(
+        event,
+        ForecastOrigin.for_kickoff(Origin.T60, event.kickoff_at_utc),
+        components.forecast_policy_version,
+    )
+    key = obligation.idempotency_key
+    binding = _artifact_binding()
+    components.prospective_repository.register_obligation(
+        key, obligation, runtime_tree.context, binding
+    )
+    obligation_record = components.prospective_repository.load_obligation(key)
+    assert obligation_record is not None
+    monkeypatch.setattr(
+        services_module.RuntimeComponents,
+        "_prospective_execution_keys",
+        lambda _self: (key,),
+    )
+    monkeypatch.setattr(
+        DurableForecastRepository,
+        "load_committed_graph",
+        lambda _self, _key: SimpleNamespace(obligation=obligation_record),
+    )
+    monkeypatch.setattr(
+        VerifiedArtifactRegistry, "for_origin", lambda _self, _origin: (binding,)
+    )
+    runtime_tree.event_path.write_bytes(b"tampered")
+    outcome_marker = components.outcome_repository.ledger.marker_path(
+        "workflow-forecast-obligations", key
+    )
+
+    with pytest.raises(DataIntegrityError):
+        runtime.services.outcomes_sync(
+            season=2026, through_week=1, context=runtime_tree.context
+        )
+
+    assert not outcome_marker.exists()
+
+
+# Catches outcome synchronization discovering only terminal forecast graphs.
+def test_outcomes_sync_imports_obligation_only_forecast_for_missingness(
+    runtime_tree: RuntimeTree, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    event = runtime_tree.install_due_event()
+    binding = _artifact_binding()
+    monkeypatch.setattr(
+        VerifiedArtifactRegistry,
+        "for_origin",
+        lambda _self, origin: (binding,) if origin is Origin.T60 else (),
+    )
+    runtime = runtime_module.build_production_runtime(
+        runtime_tree.base_config,
+        runtime_tree.environment,
+        lambda: NOW,
+        runtime_module.RuntimeClients(
+            nflverse_loaders={
+                "schedules": lambda **_kwargs: _schedule_frame(
+                    home_score=24, away_score=17
+                )
+            }
+        ),
+    )
+    components = runtime.services.outcomes_sync.__self__
+    obligation = OriginObligation(
+        event,
+        ForecastOrigin.for_kickoff(Origin.T60, event.kickoff_at_utc),
+        components.forecast_policy_version,
+    )
+    components.prospective_repository.register_obligation(
+        obligation.idempotency_key,
+        obligation,
+        runtime_tree.context,
+        binding,
+    )
+
+    result = runtime.services.outcomes_sync(
+        season=2026, through_week=1, context=runtime_tree.context
+    )
+    report = runtime.services.report_weekly(
+        season=2026, through_week=1, context=runtime_tree.context
+    )
+
+    assert result["imported_forecast_obligations"] == 1
+    assert len(report.probability) == 1
+    assert report.probability[0].n_missing == 1
+
+
 # Catches trusting reviewed projection output fields instead of recomputing every cap.
 def test_budget_plan_blocks_a_stored_projection_mismatch(runtime_tree: RuntimeTree) -> None:
     config_path = runtime_tree.data_root / "config" / "data_repo.toml"
@@ -546,6 +664,16 @@ class UnavailableDispatchClient:
     def post(self, url: str, **kwargs: object) -> httpx.Response:
         del kwargs
         return httpx.Response(503, request=httpx.Request("POST", url))
+
+
+class RecordingDispatchClient:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def post(self, url: str, **kwargs: object) -> httpx.Response:
+        del kwargs
+        self.calls += 1
+        return httpx.Response(204, request=httpx.Request("POST", url))
 
 
 # Catches dispatch planning using preview data or performing network I/O in dry-run mode.
@@ -619,3 +747,49 @@ def test_dispatch_due_rejects_non_2xx_repository_response(
             authorization=DispatchAuthorization("owner/private", "fixture-token"),
             context=runtime_tree.context,
         )
+
+
+# Catches envelopes derived from a later active schedule under an earlier verified identity.
+def test_dispatch_due_rejects_active_schedule_rotation_before_http(
+    runtime_tree: RuntimeTree, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime_tree.install_due_event()
+    config_path = runtime_tree.data_root / "config" / "data_repo.toml"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace(
+            "deployment_enabled = false", "deployment_enabled = true"
+        ),
+        encoding="utf-8",
+    )
+    client = RecordingDispatchClient()
+    runtime = runtime_module.build_production_runtime(
+        runtime_tree.base_config,
+        runtime_tree.environment,
+        lambda: NOW,
+        runtime_module.RuntimeClients(repository_dispatch_http_client=client),
+    )
+    original = services_module.RuntimeComponents._verified_dispatch_schedule
+    verifications = 0
+
+    def rotating_verification(self, schedule):
+        nonlocal verifications
+        snapshot = original(self, schedule)
+        verifications += 1
+        if verifications == 1:
+            runtime_tree.install_due_event(kickoff_at_utc=NOW + timedelta(hours=60))
+        return snapshot
+
+    monkeypatch.setattr(
+        services_module.RuntimeComponents,
+        "_verified_dispatch_schedule",
+        rotating_verification,
+    )
+
+    with pytest.raises(ValueError, match="schedule identity changed"):
+        runtime.services.dispatch_due(
+            dry_run=False,
+            authorization=DispatchAuthorization("owner/private", "fixture-token"),
+            context=runtime_tree.context,
+        )
+
+    assert client.calls == 0
