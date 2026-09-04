@@ -344,8 +344,8 @@ def test_cli_builds_production_services_only_with_explicit_runtime_config(
     assert json.loads(capsys.readouterr().out)["route"] == "readiness.check"
 
 
-# Catches a live route consulting os.environ and auto-composing without passed authorization.
-def test_cli_never_uses_implicit_process_runtime_config(
+# Catches real module/console entry calls ignoring their inherited process environment.
+def test_cli_uses_process_runtime_config_when_no_mapping_is_injected(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
     tree = RuntimeTree(tmp_path)
@@ -355,7 +355,6 @@ def test_cli_never_uses_implicit_process_runtime_config(
         tree.environment["NFL_V2_ARTIFACT_REGISTRY_SHA256"],
     )
 
-    with pytest.raises(SystemExit) as error:
-        main(["forecast", "due", "--trigger", "manual"], clock=lambda: NOW)
+    code = main(["readiness", "check"], clock=lambda: NOW)
 
-    assert error.value.code == 2
+    assert code == 0

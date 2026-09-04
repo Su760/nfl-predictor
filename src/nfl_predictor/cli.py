@@ -506,19 +506,19 @@ def main(
     parser = build_parser()
     arguments = parser.parse_args(argv)
     _validate_task13_arguments(arguments, parser)
+    active_environment = os.environ if environment is None else environment
     using_offline_services = False
     if services is None:
         runtime_config = (
-            environment["NFL_V2_RUNTIME_CONFIG"]
-            if environment is not None and "NFL_V2_RUNTIME_CONFIG" in environment
+            active_environment["NFL_V2_RUNTIME_CONFIG"]  # noqa: SIM401
+            if "NFL_V2_RUNTIME_CONFIG" in active_environment
             else None
         )
         if runtime_config is not None:
             from nfl_predictor.runtime.services import build_production_runtime
 
-            assert environment is not None
             runtime = build_production_runtime(
-                Path(runtime_config), environment, clock or (lambda: datetime.now(UTC))
+                Path(runtime_config), active_environment, clock or (lambda: datetime.now(UTC))
             )
             services = runtime.services
             if scheduler_policy is None:
@@ -540,7 +540,7 @@ def main(
     arguments.authorization = _dispatch_authorization(
         arguments,
         context,
-        os.environ if environment is None else environment,
+        active_environment,
         parser,
     )
     result = _dispatch(arguments, services, context)

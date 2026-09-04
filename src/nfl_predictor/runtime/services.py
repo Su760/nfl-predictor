@@ -7,13 +7,16 @@ import json
 import re
 import tomllib
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
+from functools import cached_property
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Protocol, cast
 
 import httpx
+import pyarrow.parquet as pq  # type: ignore[import-untyped]
 
 from nfl_predictor.betting.policy import (
     CalibrationBins,
@@ -21,6 +24,7 @@ from nfl_predictor.betting.policy import (
     CandidateEvaluation,
     CandidatePolicy,
     InMemoryDecisionRepository,
+    OddsPolicy,
     OfficialEventState,
     TrustedEventSourceMatch,
     load_odds_policy,
@@ -92,7 +96,11 @@ class RepositoryDispatchHttpClient(Protocol):
         *,
         headers: Mapping[str, str],
         json: Mapping[str, object],
-    ) -> object: ...
+    ) -> RepositoryDispatchResponse: ...
+
+
+class RepositoryDispatchResponse(Protocol):
+    status_code: int
 
 
 @dataclass(frozen=True)
@@ -174,6 +182,10 @@ def _forecast_policy_version(code_root: Path) -> str:
     if not isinstance(version, str) or not version.strip():
         raise ValueError("forecast policy version is missing")
     return version
+
+
+def _policy_hashes(code_root: Path) -> dict[str, str]:
+    return {name: _sha256(code_root / "configs" / name) for name in _POLICY_FILES}
 
 
 def _validated_registry_sha(environment: Mapping[str, str]) -> str:
@@ -274,18 +286,16 @@ def _private_config(paths: RuntimePaths) -> dict[str, Any]:
 class RuntimeComponents:
     app: AppConfig
     paths: RuntimePaths
-    environment: Mapping[str, str]
     clock: Callable[[], datetime]
-    clients: RuntimeClients
+    clients: RuntimeClients = field(repr=False)
     lineage: DurableLineageRepository
     artifact_registry: VerifiedArtifactRegistry
     required_capture: RequiredFootballCapture
     optional_odds_capture: OptionalOddsCapture
     predictor: VerifiedForecastPredictor
     market_layer: ProductionMarketLayer
-    prospective_repository: DurableForecastRepository
-    replay_repository: DurableForecastRepository
-    forecast_workflow: ForecastWorkflow
+    feature_builder: FeatureBuilder
+    odds_policy: OddsPolicy
     outcome_adapter: ArrowOutcomeAdapter
     outcome_repository: DurableOutcomeReportRepository
     outcome_workflow: OutcomeWorkflow
@@ -293,6 +303,8 @@ class RuntimeComponents:
     scheduler_freshness_policy: SchedulerFreshnessPolicy
     dependency_lock_sha256: str
     forecast_policy_version: str
+    code_sha: str
+    expected_policy_sha256: Mapping[str, str]
 
     @classmethod
     def build(
@@ -387,29 +399,7 @@ class RuntimeComponents:
                 f"{prediction.prediction_id}|{'|'.join(quote_ids)}".encode()
             ).hexdigest(),
         )
-        prospective = DurableForecastRepository(
-            paths.prospective_forecast_root,
-            "prospective",
-            artifact_resolver=artifact_registry,
-        )
-        replay = DurableForecastRepository(
-            paths.replay_forecast_root,
-            "replay",
-            artifact_resolver=artifact_registry,
-        )
         predictor = VerifiedForecastPredictor(artifact_registry)
-        forecast_workflow = ForecastWorkflow(
-            repositories=ForecastRepositories(prospective, replay),
-            required_capture=required_capture,
-            market_capture=optional_odds_capture,
-            feature_builder=cast(SnapshotBuilder, feature_builder),
-            lineage_repository=lineage,
-            artifact_registry=artifact_registry,
-            predictor=predictor,
-            market_layer=market_layer,
-            clock=clock,
-            code_sha=code_sha,
-        )
         outcome_adapter = ArrowOutcomeAdapter(capture_service, nflverse)
         outcome_repository = DurableOutcomeReportRepository(
             paths.outcome_report_root, artifact_registry
@@ -425,7 +415,6 @@ class RuntimeComponents:
         return cls(
             app=app,
             paths=paths,
-            environment=dict(environment),
             clock=clock,
             clients=active_clients,
             lineage=lineage,
@@ -434,9 +423,8 @@ class RuntimeComponents:
             optional_odds_capture=optional_odds_capture,
             predictor=predictor,
             market_layer=market_layer,
-            prospective_repository=prospective,
-            replay_repository=replay,
-            forecast_workflow=forecast_workflow,
+            feature_builder=feature_builder,
+            odds_policy=odds_policy,
             outcome_adapter=outcome_adapter,
             outcome_repository=outcome_repository,
             outcome_workflow=outcome_workflow,
@@ -446,6 +434,41 @@ class RuntimeComponents:
             ),
             dependency_lock_sha256=dependency_lock_sha256,
             forecast_policy_version=_forecast_policy_version(app.code_root),
+            code_sha=code_sha,
+            expected_policy_sha256=_policy_hashes(app.code_root),
+        )
+
+    @cached_property
+    def prospective_repository(self) -> DurableForecastRepository:
+        return DurableForecastRepository(
+            self.paths.prospective_forecast_root,
+            "prospective",
+            artifact_resolver=self.artifact_registry,
+        )
+
+    @cached_property
+    def replay_repository(self) -> DurableForecastRepository:
+        return DurableForecastRepository(
+            self.paths.replay_forecast_root,
+            "replay",
+            artifact_resolver=self.artifact_registry,
+        )
+
+    @cached_property
+    def forecast_workflow(self) -> ForecastWorkflow:
+        return ForecastWorkflow(
+            repositories=ForecastRepositories(
+                self.prospective_repository, self.replay_repository
+            ),
+            required_capture=self.required_capture,
+            market_capture=self.optional_odds_capture,
+            feature_builder=cast(SnapshotBuilder, self.feature_builder),
+            lineage_repository=self.lineage,
+            artifact_registry=self.artifact_registry,
+            predictor=self.predictor,
+            market_layer=self.market_layer,
+            clock=self.clock,
+            code_sha=self.code_sha,
         )
 
     @staticmethod
@@ -478,9 +501,31 @@ class RuntimeComponents:
     def active_events(self) -> tuple[EventVersion, ...]:
         return tuple(self._load_active_events(self.paths, self.lineage))
 
+    @staticmethod
+    def _verified_candidate_sha(
+        path: Path, expected_events: tuple[EventVersion, ...]
+    ) -> str:
+        try:
+            payload = path.read_bytes()
+            parquet = pq.ParquetFile(BytesIO(payload))
+            if not parquet.schema_arrow.equals(schema_for(EventVersion), check_metadata=True):
+                raise DataIntegrityError("candidate event schema does not match EventVersion V1")
+            events = tuple(
+                DurableLineageRepository._event_from_parquet_row(row)
+                for row in parquet.read().to_pylist()
+            )
+        except DataIntegrityError:
+            raise
+        except Exception as error:
+            raise DataIntegrityError("candidate event bytes are unreadable") from error
+        if events != expected_events:
+            raise DataIntegrityError("candidate event content conflicts with intended records")
+        return hashlib.sha256(payload).hexdigest()
+
     def schedule_sync(
         self, *, season: int, context: ForecastExecutionContext
     ) -> dict[str, object]:
+        existing = list(self.active_events())
         adapter = self.required_capture.adapter
         service = self.required_capture.capture_service
         manifest = service.capture(
@@ -490,10 +535,6 @@ class RuntimeComponents:
         )
         raw_path = self.paths.data_root / manifest.raw_path
         proposed = self.required_capture.normalizer.normalize_events(raw_path.read_bytes(), manifest)
-        try:
-            existing = list(self.active_events())
-        except (DataIntegrityError, OSError, ValueError):
-            existing = []
         reconciler = EventReconciler()
         candidates: list[EventVersion] = []
         quarantined: list[str] = []
@@ -525,7 +566,7 @@ class RuntimeComponents:
         ).hexdigest()
         event_path = self.paths.data_root / "candidates" / f"active-events-{season}-{semantic_sha}.parquet"
         if event_path.exists():
-            event_sha = _sha256(event_path)
+            event_sha = self._verified_candidate_sha(event_path, ordered)
         else:
             event_sha = write_contracts(event_path, ordered, schema_for(EventVersion))
         event_keys = [
@@ -609,6 +650,9 @@ class RuntimeComponents:
         self, *, season: int, through_week: int, context: ForecastExecutionContext
     ) -> dict[str, object]:
         del context
+        imported_obligations = self._import_missing_forecast_obligations(
+            season, through_week
+        )
         events = tuple(
             event
             for event in self.active_events()
@@ -625,7 +669,11 @@ class RuntimeComponents:
             )
             for event in events
         ]
-        return {"route": "outcomes.sync", "runs": runs}
+        return {
+            "route": "outcomes.sync",
+            "imported_forecast_obligations": imported_obligations,
+            "runs": runs,
+        }
 
     def _prospective_execution_keys(self) -> tuple[str, ...]:
         marker_root = (
@@ -642,11 +690,53 @@ class RuntimeComponents:
             keys.append(key)
         return tuple(keys)
 
+    def _import_missing_forecast_obligations(
+        self, season: int, through_week: int
+    ) -> int:
+        existing = {
+            bundle.obligation.execution_key
+            for bundle in self.outcome_repository.forecast_obligation_bundles()
+        }
+        imported = 0
+        for key in self._prospective_execution_keys():
+            graph = self.prospective_repository.load_committed_graph(key)
+            if (
+                graph.obligation.event.season != season
+                or graph.obligation.event.week > through_week
+                or graph.obligation.execution_key in existing
+            ):
+                continue
+            self.outcome_repository.import_forecast_obligation(
+                self.prospective_repository, key
+            )
+            existing.add(graph.obligation.execution_key)
+            imported += 1
+        return imported
+
+    def _reconcile_committed_outcome(self, event: EventVersion) -> int:
+        outcome = self.outcome_repository.latest_outcome(
+            event.canonical_event_id, "nflverse"
+        )
+        if outcome is None:
+            return 0
+        captures = self.outcome_repository._captures_for_outcome(outcome)
+        if not captures:
+            raise DataIntegrityError("committed outcome has no exact capture manifest")
+        manifest = max(
+            captures,
+            key=lambda item: (item.response_received_at_utc, item.capture_id),
+        )
+        settlements, _ = self.outcome_workflow._reconcile_settlements(
+            event, outcome, manifest
+        )
+        return len(settlements)
+
     def settle(
         self, *, season: int, through_week: int, context: ForecastExecutionContext
     ) -> dict[str, object]:
         del context
         imported = 0
+        reconciled = 0
         for key in self._prospective_execution_keys():
             graph = self.prospective_repository.load_committed_graph(key)
             if graph.obligation.event.season != season or graph.obligation.event.week > through_week:
@@ -656,12 +746,19 @@ class RuntimeComponents:
             except KeyError:
                 pass
             else:
+                reconciled += self._reconcile_committed_outcome(
+                    graph.obligation.event
+                )
                 continue
-            self.outcome_repository.import_forecast_graph(self.prospective_repository, key)
+            self.outcome_repository.import_forecast_graph(
+                self.prospective_repository, key
+            )
             imported += 1
+            reconciled += self._reconcile_committed_outcome(graph.obligation.event)
         return {
             "route": "settle",
             "imported_forecast_graphs": imported,
+            "reconciled_settlements": reconciled,
             "settlement_count": len(self.outcome_repository.settlement_envelopes()),
         }
 
@@ -670,6 +767,44 @@ class RuntimeComponents:
     ) -> object:
         del context
         return self.report_workflow.weekly(season, through_week)
+
+    def _verified_dispatch_schedule(self, schedule: Mapping[str, object]) -> str:
+        self.active_events()
+        relative_manifest = schedule.get("manifest_path")
+        declared_manifest_sha = schedule.get("manifest_sha256")
+        active_manifest_sha = schedule.get("active_event_version_manifest_sha256")
+        if not isinstance(relative_manifest, str) or not relative_manifest:
+            raise ValueError("dispatch schedule manifest path is missing")
+        if (
+            not isinstance(declared_manifest_sha, str)
+            or _SHA256.fullmatch(declared_manifest_sha) is None
+        ):
+            raise ValueError("dispatch schedule manifest hash is invalid")
+        root = self.paths.data_root.resolve(strict=True)
+        manifest_path = (root / relative_manifest).resolve(strict=True)
+        try:
+            manifest_path.relative_to(root)
+        except ValueError as error:
+            raise ValueError("dispatch schedule manifest escapes private root") from error
+        raw_manifest = manifest_path.read_bytes()
+        if hashlib.sha256(raw_manifest).hexdigest() != declared_manifest_sha:
+            raise ValueError("dispatch schedule manifest hash does not match")
+        try:
+            manifest = json.loads(raw_manifest)
+        except json.JSONDecodeError as error:
+            raise ValueError("dispatch schedule manifest is invalid") from error
+        if not isinstance(manifest, dict):
+            raise TypeError("dispatch schedule manifest must be an object")
+        if not (
+            schedule.get("generated_from_active_event_versions") is True
+            and manifest.get("generated_from_active_event_versions") is True
+            and isinstance(active_manifest_sha, str)
+            and _SHA256.fullmatch(active_manifest_sha)
+            and manifest.get("active_event_version_manifest_sha256")
+            == active_manifest_sha
+        ):
+            raise ValueError("dispatch schedule is not bound to active event versions")
+        return declared_manifest_sha
 
     def odds_budget_plan(
         self, *, season: int, context: ForecastExecutionContext
@@ -716,7 +851,13 @@ class RuntimeComponents:
         )
         if stored_projection != computed_projection:
             blockers.append("STORED_USAGE_PROJECTION_MISMATCH")
-        if int(projection["projected_odds_requests"]) > 400:
+        stored_odds_requests = int(projection["projected_odds_requests"])
+        projected_odds_requests = self.odds_policy.worst_case_monthly_credits or 0
+        if stored_odds_requests != projected_odds_requests:
+            blockers.append("STORED_ODDS_REQUEST_PROJECTION_MISMATCH")
+        if max(stored_odds_requests, projected_odds_requests) > self.odds_policy.monthly_hard_stop:
+            blockers.append("ODDS_REQUEST_BUDGET_EXCEEDS_POLICY")
+        if max(stored_odds_requests, projected_odds_requests) > 400:
             blockers.append("ODDS_REQUEST_BUDGET_EXCEEDS_400")
         if bool(config.get("zero_dollar_mode")) and (
             plan.projected_paid_actions_minutes or plan.projected_paid_storage_bytes
@@ -724,32 +865,9 @@ class RuntimeComponents:
             blockers.append("PROJECTED_PAID_USAGE_NONZERO")
         schedule_complete = False
         try:
-            self.active_events()
-            relative_manifest = schedule.get("manifest_path")
-            declared_manifest_sha = schedule.get("manifest_sha256")
-            active_manifest_sha = schedule.get("active_event_version_manifest_sha256")
-            if not isinstance(relative_manifest, str) or not relative_manifest:
-                raise ValueError("dispatch schedule manifest path is missing")
-            manifest_path = (self.paths.data_root / relative_manifest).resolve(strict=True)
-            manifest_path.relative_to(self.paths.data_root)
-            raw_manifest = manifest_path.read_bytes()
-            if (
-                not isinstance(declared_manifest_sha, str)
-                or hashlib.sha256(raw_manifest).hexdigest() != declared_manifest_sha
-            ):
-                raise ValueError("dispatch schedule manifest hash does not match")
-            manifest = json.loads(raw_manifest)
-            schedule_complete = bool(
-                schedule.get("generated_from_active_event_versions") is True
-                and manifest.get("generated_from_active_event_versions") is True
-                and isinstance(active_manifest_sha, str)
-                and _SHA256.fullmatch(active_manifest_sha)
-                and manifest.get("active_event_version_manifest_sha256")
-                == active_manifest_sha
-            )
-            if not schedule_complete:
-                raise ValueError("dispatch schedule is not bound to active event versions")
-        except (DataIntegrityError, OSError, TypeError, ValueError, json.JSONDecodeError):
+            self._verified_dispatch_schedule(schedule)
+            schedule_complete = True
+        except (DataIntegrityError, OSError, TypeError, ValueError):
             blockers.append("ACTIVE_EVENT_VERSION_SCHEDULE_UNAVAILABLE")
         if not config.get("deployment_enabled"):
             blockers.append("DEPLOYMENT_DISABLED")
@@ -759,7 +877,9 @@ class RuntimeComponents:
             "deployment_allowed": not blockers,
             "blockers": blockers,
             "github_billed_minutes": plan.github_billed_minutes,
-            "projected_odds_requests": int(projection["projected_odds_requests"]),
+            "projected_odds_requests": projected_odds_requests,
+            "stored_projected_odds_requests": stored_odds_requests,
+            "odds_monthly_hard_stop": self.odds_policy.monthly_hard_stop,
             "projected_paid_actions_minutes": plan.projected_paid_actions_minutes,
             "projected_paid_storage_bytes": plan.projected_paid_storage_bytes,
             "schedule_complete": schedule_complete,
@@ -824,9 +944,10 @@ class RuntimeComponents:
         except OSError:
             blockers.append("DEPENDENCY_LOCK_INVALID")
         try:
-            hashes["policy_sha256"] = {
-                name: _sha256(self.app.code_root / "configs" / name) for name in _POLICY_FILES
-            }
+            current_policy_sha256 = _policy_hashes(self.app.code_root)
+            hashes["policy_sha256"] = current_policy_sha256
+            if current_policy_sha256 != self.expected_policy_sha256:
+                blockers.append("POLICY_BINDING_CHANGED")
         except OSError:
             blockers.append("POLICY_BINDING_INVALID")
         try:
@@ -892,7 +1013,7 @@ class RuntimeComponents:
         source_repository = str(authorization_config["source_public_repository"])
         default_branch = str(authorization_config["source_default_branch"])
         code_sha = str(authorization_config["approved_public_code_sha"])
-        schedule_sha = str(schedule["manifest_sha256"])
+        schedule_sha = self._verified_dispatch_schedule(schedule)
         envelopes = []
         for cluster in due_clusters(self.active_events(), _as_of(context)):
             nonce = hashlib.sha256(
@@ -923,8 +1044,9 @@ class RuntimeComponents:
             owned_client = httpx.Client(timeout=20.0)
             client = owned_client
         try:
-            responses = [
-                client.post(
+            dispatched = 0
+            for envelope in envelopes:
+                response = client.post(
                     f"https://api.github.com/repos/{authorization.target_repository}/dispatches",
                     headers={
                         "Accept": "application/vnd.github+json",
@@ -933,15 +1055,23 @@ class RuntimeComponents:
                     },
                     json=repository_dispatch_request(envelope),
                 )
-                for envelope in envelopes
-            ]
+                status_code = response.status_code
+                if (
+                    isinstance(status_code, bool)
+                    or not isinstance(status_code, int)
+                    or not 200 <= status_code < 300
+                ):
+                    raise ValueError(
+                        f"repository dispatch failed with HTTP status {status_code}"
+                    )
+                dispatched += 1
         finally:
             if owned_client is not None:
                 owned_client.close()
         return {
             "route": "dispatch.due",
             "dry_run": False,
-            "dispatched": len(responses),
+            "dispatched": dispatched,
         }
 
 
@@ -952,7 +1082,7 @@ def build_production_runtime(
     clients: RuntimeClients | None = None,
 ) -> ProductionRuntime:
     registry_sha = _validated_registry_sha(environment)
-    app = load_app_config(config_path)
+    app = load_app_config(config_path, environment=environment)
     paths = RuntimePaths.from_config(app)
     lineage = DurableLineageRepository(paths.lineage_root, paths.data_root)
     artifact_registry = VerifiedArtifactRegistry.from_private_config(

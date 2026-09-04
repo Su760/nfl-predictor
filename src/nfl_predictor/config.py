@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tomllib
+from collections.abc import Mapping
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
@@ -14,10 +15,13 @@ class AppConfig(BaseModel):
     data_root: Path
 
 
-def load_app_config(path: Path) -> AppConfig:
+def load_app_config(
+    path: Path, environment: Mapping[str, str] | None = None
+) -> AppConfig:
     raw = tomllib.loads(path.read_text(encoding="utf-8"))
     code_root = Path(__file__).resolve().parents[2]
-    environment_data_root = os.environ.get("NFL_PREDICTOR_DATA_DIR")
+    active_environment = os.environ if environment is None else environment
+    environment_data_root = active_environment.get("NFL_PREDICTOR_DATA_DIR")
     if environment_data_root is not None:
         data_root = Path(environment_data_root)
         if not data_root.is_absolute():

@@ -24,6 +24,8 @@ from nfl_predictor.betting.policy import (
     load_odds_policy,
 )
 from nfl_predictor.capture.service import CaptureService
+from nfl_predictor.cli import SchedulerFreshnessPolicy
+from nfl_predictor.config import AppConfig
 from nfl_predictor.contracts.betting import BettingDecision
 from nfl_predictor.contracts.enums import Origin
 from nfl_predictor.contracts.events import EventVersion, ForecastOrigin
@@ -49,15 +51,17 @@ from nfl_predictor.runtime.capture import (
     OptionalOddsCapture,
     RequiredFootballCapture,
 )
-from nfl_predictor.runtime.lineage import DurableLineageRepository
+from nfl_predictor.runtime.lineage import DurableLineageRepository, RuntimePaths
 from nfl_predictor.runtime.markets import (
     DurableCalibrationBins,
     FrozenCalibrationBin,
     ProductionMarketLayer,
 )
+from nfl_predictor.runtime.services import RuntimeClients, RuntimeComponents
 from nfl_predictor.sources.base import BuildIdentity
 from nfl_predictor.sources.nflverse import NflverseAdapter
 from nfl_predictor.sources.odds_api import OddsApiAdapter
+from nfl_predictor.storage import schema_for, write_contracts
 from nfl_predictor.workflows.forecast import (
     DurableForecastRepository,
     ForecastExecutionContext,
@@ -467,13 +471,15 @@ def test_fixture_source_to_scorecard_chain_never_uses_network(
         calibration_bins=bins,
         comparator_id=lambda prediction, _quote_ids: f"comparator-{prediction.prediction_id}",
     )
+    app = AppConfig(code_root=ROOT, data_root=private_root)
+    paths = RuntimePaths.from_config(app)
     forecast_repository = DurableForecastRepository(
-        private_root / "forecast", "prospective", artifact_resolver=registry
+        paths.prospective_forecast_root, "prospective", artifact_resolver=registry
     )
     obligation = OriginObligation(
         _event(), ForecastOrigin.for_kickoff(Origin.T72, KICKOFF), "forecast-v1"
     )
-    forecast = ForecastWorkflow(
+    forecast_workflow = ForecastWorkflow(
         repositories=ForecastRepositories(forecast_repository),
         required_capture=required_capture,
         market_capture=optional_odds,
@@ -485,16 +491,14 @@ def test_fixture_source_to_scorecard_chain_never_uses_network(
         clock=lambda: NOW,
         code_sha=CODE_SHA,
         id_factory=lambda: "attempt-fixture",
-    ).run(obligation, "fixture", ForecastExecutionContext.live(NOW))
+    )
+    forecast = forecast_workflow.run(
+        obligation, "fixture", ForecastExecutionContext.live(NOW)
+    )
     assert forecast is not None
     assert forecast.status == "COMPLETE", forecast.reason_codes
 
-    outcome_repository = DurableOutcomeReportRepository(
-        private_root / "outcomes-and-reports", registry
-    )
-    outcome_repository.import_forecast_graph(
-        forecast_repository, obligation.idempotency_key
-    )
+    outcome_repository = DurableOutcomeReportRepository(paths.outcome_report_root, registry)
 
     def load_final_schedules(*, seasons: list[int]) -> pl.DataFrame:
         assert seasons == [2026]
@@ -505,23 +509,96 @@ def test_fixture_source_to_scorecard_chain_never_uses_network(
         lambda: OUTCOME_AT,
     )
     outcome_adapter = ArrowOutcomeAdapter(capture_service, outcome_source)
-    outcome = OutcomeWorkflow(outcome_adapter, outcome_repository).run(
-        _event(),
-        request={
-            "dataset": "schedules",
-            "seasons": [2026],
-            "source_event_id": "2026_02_GB_CHI",
-        },
-    )
-    scorecards = ReportWorkflow(
+    outcome_workflow = OutcomeWorkflow(outcome_adapter, outcome_repository)
+    report_workflow = ReportWorkflow(
         outcome_repository,
         evaluation_policy=load_evaluation_policy(
             ROOT / "configs" / "evaluation_policy_v1.toml"
         ),
         interval_confidence=Decimal("0.95"),
-    ).weekly(2026, 2)
+    )
+    event_path = private_root / "events" / "active.parquet"
+    event_sha = write_contracts(event_path, (_event(),), schema_for(EventVersion))
+    active_manifest = private_root / "active-events.json"
+    active_manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": "active-events-v1",
+                "season": 2026,
+                "files": [
+                    {
+                        "path": "events/active.parquet",
+                        "sha256": event_sha,
+                        "events": [
+                            {
+                                "canonical_event_id": _event().canonical_event_id,
+                                "event_version": 1,
+                            }
+                        ],
+                    }
+                ],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        encoding="utf-8",
+    )
+    (private_root / "config" / "data_repo.toml").write_text(
+        "\n".join(
+            (
+                "[schedule]",
+                f'active_event_version_manifest_sha256 = "{_sha(active_manifest)}"',
+            )
+        ),
+        encoding="utf-8",
+    )
+    components = RuntimeComponents(
+        app=app,
+        paths=paths,
+        clock=lambda: NOW,
+        clients=RuntimeClients(),
+        lineage=lineage,
+        artifact_registry=registry,
+        required_capture=required_capture,
+        optional_odds_capture=optional_odds,
+        predictor=predictor,
+        market_layer=market_layer,
+        feature_builder=feature_builder,
+        odds_policy=odds_policy,
+        outcome_adapter=outcome_adapter,
+        outcome_repository=outcome_repository,
+        outcome_workflow=outcome_workflow,
+        report_workflow=report_workflow,
+        scheduler_freshness_policy=SchedulerFreshnessPolicy(
+            "scheduler-freshness-v1", timedelta(minutes=5)
+        ),
+        dependency_lock_sha256=LOCK_SHA,
+        forecast_policy_version="forecast-v1",
+        code_sha=CODE_SHA,
+        expected_policy_sha256={},
+    )
+    services = components.service_registry()
 
-    assert outcome.outcome.result == "home"
+    outcome_result = services.outcomes_sync(
+        season=2026,
+        through_week=2,
+        context=ForecastExecutionContext.live(OUTCOME_AT),
+    )
+    settlement_result = services.settle(
+        season=2026,
+        through_week=2,
+        context=ForecastExecutionContext.live(OUTCOME_AT),
+    )
+    scorecards = services.report_weekly(
+        season=2026,
+        through_week=2,
+        context=ForecastExecutionContext.live(OUTCOME_AT),
+    )
+
+    assert outcome_result["runs"][0].outcome.result == "home"
+    assert settlement_result["imported_forecast_graphs"] == 1
+    assert settlement_result["reconciled_settlements"] == 1
+    assert settlement_result["settlement_count"] == 1
     probability = next(row for row in scorecards.probability if row.artifact_id == ARTIFACT_ID)
     winner = next(row for row in scorecards.winner if row.artifact_id == ARTIFACT_ID)
     market = next(row for row in scorecards.market if row.artifact_id == ARTIFACT_ID)

@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import httpx
+import polars as pl
 import pytest
 
 import nfl_predictor.runtime as runtime_module
 import nfl_predictor.runtime.services as services_module
+from nfl_predictor.config import AppConfig
 from nfl_predictor.contracts.events import EventVersion
 from nfl_predictor.runtime.artifacts import VerifiedForecastPredictor
 from nfl_predictor.runtime.capture import (
@@ -17,7 +21,8 @@ from nfl_predictor.runtime.capture import (
     RequiredFootballCapture,
 )
 from nfl_predictor.runtime.markets import ProductionMarketLayer
-from nfl_predictor.storage import schema_for, write_contracts
+from nfl_predictor.storage import DataIntegrityError, schema_for, write_contracts
+from nfl_predictor.workflows.dispatch import DispatchAuthorization
 from nfl_predictor.workflows.forecast import (
     DurableForecastRepository,
     ForecastExecutionContext,
@@ -158,7 +163,24 @@ class RuntimeTree:
             encoding="utf-8",
         )
         dispatch = self.data_root / "config" / "dispatch-windows-2026.json"
-        dispatch.write_text("{}", encoding="utf-8")
+        dispatch.write_text(
+            json.dumps(
+                {
+                    "active_event_version_manifest_sha256": active_sha,
+                    "generated_from_active_event_versions": True,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            encoding="utf-8",
+        )
+        self.dispatch_sha = hashlib.sha256(dispatch.read_bytes()).hexdigest()
+        private_config = self.data_root / "config" / "data_repo.toml"
+        private_config.write_text(
+            private_config.read_text(encoding="utf-8").replace("2" * 64, self.dispatch_sha),
+            encoding="utf-8",
+        )
+        self.dispatch_manifest = dispatch
         self.environment = {
             "NFL_V2_ARTIFACT_REGISTRY_SHA256": hashlib.sha256(
                 self.registry_path.read_bytes()
@@ -169,6 +191,27 @@ class RuntimeTree:
     def runtime(self):
         builder = runtime_module.build_production_runtime
         return builder(self.base_config, self.environment, lambda: NOW)
+
+    def refresh_dispatch_manifest(self) -> None:
+        active_sha = hashlib.sha256(self.active_manifest.read_bytes()).hexdigest()
+        self.dispatch_manifest.write_text(
+            json.dumps(
+                {
+                    "active_event_version_manifest_sha256": active_sha,
+                    "generated_from_active_event_versions": True,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            encoding="utf-8",
+        )
+        next_dispatch_sha = hashlib.sha256(self.dispatch_manifest.read_bytes()).hexdigest()
+        config_path = self.data_root / "config" / "data_repo.toml"
+        config = config_path.read_text(encoding="utf-8")
+        config_path.write_text(
+            config.replace(self.dispatch_sha, next_dispatch_sha), encoding="utf-8"
+        )
+        self.dispatch_sha = next_dispatch_sha
 
     def add_champion(self, *, artifact_id: str, origin: str) -> None:
         document = json.loads(self.registry_path.read_text(encoding="utf-8"))
@@ -236,12 +279,33 @@ class RuntimeTree:
             config.replace(old_sha, hashlib.sha256(self.active_manifest.read_bytes()).hexdigest()),
             encoding="utf-8",
         )
+        self.refresh_dispatch_manifest()
         return event
 
 
 @pytest.fixture
 def runtime_tree(tmp_path: Path) -> RuntimeTree:
     return RuntimeTree(tmp_path)
+
+
+def _schedule_frame() -> pl.DataFrame:
+    return pl.DataFrame(
+        {
+            "game_id": ["2026_01_GB_CHI"],
+            "season": [2026],
+            "game_type": ["REG"],
+            "week": [1],
+            "gameday": ["2026-09-10"],
+            "gametime": ["19:20"],
+            "away_team": ["GB"],
+            "home_team": ["CHI"],
+            "away_score": [None],
+            "home_score": [None],
+            "location": ["Home"],
+            "div_game": [True],
+            "stadium_id": ["soldier-field"],
+        }
+    )
 
 
 # Catches a composition root that leaves route callbacks unbound or uses preview placeholders.
@@ -277,6 +341,94 @@ def test_build_requires_explicit_reviewed_registry_sha(runtime_tree: RuntimeTree
 
     with pytest.raises(ValueError, match="registry SHA"):
         builder(runtime_tree.base_config, {}, lambda: NOW)
+
+
+# Catches credentials retained behind bound service methods and exposed through repr().
+def test_service_registry_repr_does_not_expose_environment_secrets(
+    runtime_tree: RuntimeTree,
+) -> None:
+    environment = {
+        **runtime_tree.environment,
+        "ODDS_API_KEY": "odds-secret-value",
+        "NFL_DATA_REPO_DISPATCH_TOKEN": "dispatch-secret-value",
+    }
+
+    runtime = runtime_module.build_production_runtime(
+        runtime_tree.base_config, environment, lambda: NOW
+    )
+
+    representation = repr(runtime.services)
+    assert "odds-secret-value" not in representation
+    assert "dispatch-secret-value" not in representation
+
+
+# Catches read-only composition eagerly creating durable forecast directories.
+def test_build_readiness_and_dispatch_dry_run_do_not_write_private_tree(
+    runtime_tree: RuntimeTree,
+) -> None:
+    before = tuple(
+        sorted(path.relative_to(runtime_tree.data_root) for path in runtime_tree.data_root.rglob("*"))
+    )
+
+    runtime = runtime_tree.runtime()
+    runtime.services.readiness_check(context=runtime_tree.context)
+    runtime.services.dispatch_due(
+        dry_run=True, authorization=None, context=runtime_tree.context
+    )
+
+    after = tuple(
+        sorted(path.relative_to(runtime_tree.data_root) for path in runtime_tree.data_root.rglob("*"))
+    )
+    assert after == before
+
+
+# Catches a syntactically valid policy edit leaving readiness on stale in-memory policies.
+def test_readiness_blocks_policy_bytes_changed_after_composition(
+    runtime_tree: RuntimeTree, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    code_root = tmp_path / "code"
+    shutil.copytree(Path(__file__).resolve().parents[2] / "configs", code_root / "configs")
+    shutil.copy2(Path(__file__).resolve().parents[2] / "uv.lock", code_root / "uv.lock")
+    monkeypatch.setattr(
+        services_module,
+        "load_app_config",
+        lambda _path, environment=None: AppConfig(
+            code_root=code_root, data_root=runtime_tree.data_root
+        ),
+    )
+    runtime = runtime_tree.runtime()
+    venues = code_root / "configs" / "venues_v1.csv"
+    venues.write_text(venues.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+
+    result = runtime.services.readiness_check(context=runtime_tree.context)
+
+    assert "POLICY_BINDING_CHANGED" in result["blockers"]
+
+
+# Catches trusting a stored request projection on either side of the frozen worst case.
+@pytest.mark.parametrize("stored_requests", [0, 2])
+def test_budget_plan_cross_checks_loaded_odds_policy_projection_and_cap(
+    runtime_tree: RuntimeTree, monkeypatch: pytest.MonkeyPatch, stored_requests: int
+) -> None:
+    config_path = runtime_tree.data_root / "config" / "data_repo.toml"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace(
+            "projected_odds_requests = 0",
+            f"projected_odds_requests = {stored_requests}",
+        ),
+        encoding="utf-8",
+    )
+    loaded = services_module.load_odds_policy(
+        Path(__file__).resolve().parents[2] / "configs" / "odds_policy_v1.toml"
+    ).model_copy(update={"monthly_hard_stop": 1, "worst_case_monthly_credits": 1})
+    monkeypatch.setattr(services_module, "load_odds_policy", lambda _path: loaded)
+    runtime = runtime_tree.runtime()
+
+    result = runtime.services.odds_budget_plan(season=2026, context=runtime_tree.context)
+
+    assert "STORED_ODDS_REQUEST_PROJECTION_MISMATCH" in result["blockers"]
+    if stored_requests == 2:
+        assert "ODDS_REQUEST_BUDGET_EXCEEDS_POLICY" in result["blockers"]
 
 
 # Catches applying one origin's champion identity to every market-candidate evaluation.
@@ -318,6 +470,54 @@ def test_readiness_fails_closed_after_active_event_bytes_are_tampered(
     assert "ACTIVE_SCHEDULE_INVALID" in result["blockers"]
 
 
+# Catches a schedule refresh performing source I/O before validating active history.
+def test_schedule_sync_rejects_corrupt_active_history_before_capture(
+    runtime_tree: RuntimeTree,
+) -> None:
+    calls = 0
+
+    def schedules(*, seasons: list[int]) -> pl.DataFrame:
+        nonlocal calls
+        calls += 1
+        assert seasons == [2026]
+        return _schedule_frame()
+
+    runtime = runtime_module.build_production_runtime(
+        runtime_tree.base_config,
+        runtime_tree.environment,
+        lambda: NOW,
+        runtime_module.RuntimeClients(nflverse_loaders={"schedules": schedules}),
+    )
+    runtime_tree.event_path.write_bytes(b"tampered")
+
+    with pytest.raises(DataIntegrityError):
+        runtime.services.schedule_sync(season=2026, context=runtime_tree.context)
+
+    assert calls == 0
+
+
+# Catches an existing candidate path being rehashed and blessed after byte substitution.
+def test_schedule_sync_rejects_tampered_existing_candidate_bytes(
+    runtime_tree: RuntimeTree,
+) -> None:
+    runtime = runtime_module.build_production_runtime(
+        runtime_tree.base_config,
+        runtime_tree.environment,
+        lambda: NOW,
+        runtime_module.RuntimeClients(
+            nflverse_loaders={"schedules": lambda **_kwargs: _schedule_frame()}
+        ),
+    )
+    first = runtime.services.schedule_sync(season=2026, context=runtime_tree.context)
+    candidate = runtime_tree.data_root / first["candidate_manifest_path"]
+    manifest = json.loads(candidate.read_text(encoding="utf-8"))
+    event_path = runtime_tree.data_root / manifest["files"][0]["path"]
+    event_path.write_bytes(b"tampered")
+
+    with pytest.raises(DataIntegrityError, match="candidate"):
+        runtime.services.schedule_sync(season=2026, context=runtime_tree.context)
+
+
 # Catches trusting reviewed projection output fields instead of recomputing every cap.
 def test_budget_plan_blocks_a_stored_projection_mismatch(runtime_tree: RuntimeTree) -> None:
     config_path = runtime_tree.data_root / "config" / "data_repo.toml"
@@ -342,6 +542,12 @@ class NoDispatchClient:
         raise AssertionError("dry-run dispatch attempted an HTTP request")
 
 
+class UnavailableDispatchClient:
+    def post(self, url: str, **kwargs: object) -> httpx.Response:
+        del kwargs
+        return httpx.Response(503, request=httpx.Request("POST", url))
+
+
 # Catches dispatch planning using preview data or performing network I/O in dry-run mode.
 def test_dispatch_due_dry_run_returns_exact_active_schedule_envelope_without_http(
     runtime_tree: RuntimeTree,
@@ -362,14 +568,54 @@ def test_dispatch_due_dry_run_returns_exact_active_schedule_envelope_without_htt
     )
 
     assert result["dry_run"] is True
-    assert result["envelopes"] == [
-        {
-            "event_type": "nfl_forecast_due",
-            "source_repository": "owner/public",
-            "source_ref": "refs/heads/main",
-            "cluster_id": "T72:2026-09-07T00:20:00+00:00",
-            "code_sha": CODE_SHA,
-            "nonce": "3f7bb797935039552449b632a523e361e4c1f023a6a73c7ff32b8ec6366fa942",
-            "schedule_manifest_sha": "2" * 64,
-        }
-    ]
+    envelope = result["envelopes"][0]
+    assert envelope["event_type"] == "nfl_forecast_due"
+    assert envelope["source_repository"] == "owner/public"
+    assert envelope["source_ref"] == "refs/heads/main"
+    assert envelope["cluster_id"] == "T72:2026-09-07T00:20:00+00:00"
+    assert envelope["code_sha"] == CODE_SHA
+    assert envelope["schedule_manifest_sha"] == runtime_tree.dispatch_sha
+    assert len(envelope["nonce"]) == 64
+
+
+# Catches dry-run dispatch trusting a configured hash without reading the manifest bytes.
+def test_dispatch_due_dry_run_rejects_tampered_dispatch_manifest(
+    runtime_tree: RuntimeTree,
+) -> None:
+    runtime_tree.install_due_event()
+    runtime = runtime_tree.runtime()
+    runtime_tree.dispatch_manifest.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="dispatch schedule"):
+        runtime.services.dispatch_due(
+            dry_run=True, authorization=None, context=runtime_tree.context
+        )
+
+
+# Catches an HTTP error response being included in the successful dispatch count.
+def test_dispatch_due_rejects_non_2xx_repository_response(
+    runtime_tree: RuntimeTree,
+) -> None:
+    runtime_tree.install_due_event()
+    config_path = runtime_tree.data_root / "config" / "data_repo.toml"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace(
+            "deployment_enabled = false", "deployment_enabled = true"
+        ),
+        encoding="utf-8",
+    )
+    runtime = runtime_module.build_production_runtime(
+        runtime_tree.base_config,
+        runtime_tree.environment,
+        lambda: NOW,
+        runtime_module.RuntimeClients(
+            repository_dispatch_http_client=UnavailableDispatchClient()
+        ),
+    )
+
+    with pytest.raises(ValueError, match="503"):
+        runtime.services.dispatch_due(
+            dry_run=False,
+            authorization=DispatchAuthorization("owner/private", "fixture-token"),
+            context=runtime_tree.context,
+        )
