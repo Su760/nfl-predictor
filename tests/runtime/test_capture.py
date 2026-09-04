@@ -4,6 +4,7 @@ import hashlib
 import json
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -16,9 +17,10 @@ from nfl_predictor.betting.policy import (
     load_odds_policy,
 )
 from nfl_predictor.capture.service import CaptureService
-from nfl_predictor.contracts.enums import Origin, ProvenanceGrade
+from nfl_predictor.contracts.enums import Origin, PredictionStatus, ProvenanceGrade
 from nfl_predictor.contracts.events import EventVersion, ForecastOrigin
-from nfl_predictor.contracts.lineage import CaptureManifest, NormalizedFact
+from nfl_predictor.contracts.forecasts import Prediction
+from nfl_predictor.contracts.lineage import CaptureManifest, FeatureSnapshot, NormalizedFact
 from nfl_predictor.contracts.markets import MoneylineQuote
 from nfl_predictor.features.builder import FeatureBuilder
 from nfl_predictor.features.policy import load_feature_policy
@@ -36,7 +38,15 @@ from nfl_predictor.runtime.capture import (
 from nfl_predictor.runtime.lineage import DurableLineageRepository
 from nfl_predictor.sources.base import BuildIdentity, RawResponse
 from nfl_predictor.sources.nflverse import NflverseAdapter
-from nfl_predictor.workflows.forecast import MarketCaptureDisabled
+from nfl_predictor.workflows.forecast import (
+    ArtifactBinding,
+    CaptureBundle,
+    DurableForecastRepository,
+    ForecastExecutionContext,
+    ForecastRepositories,
+    ForecastWorkflow,
+    MarketCaptureDisabled,
+)
 
 NOW = datetime(2026, 9, 10, 12, tzinfo=UTC)
 BUILD = BuildIdentity("1" * 40, "2" * 64)
@@ -482,6 +492,221 @@ def test_normalized_capture_publishes_and_builds_exact_v1_snapshot(tmp_path: Pat
         "team_passing_prior": 2,
         "team_strength_prior": 2,
     }
+
+
+def test_repeated_replay_and_post_capture_retry_use_root_source_and_current_batch(
+    tmp_path: Path,
+) -> None:
+    class SimulatedPostCaptureCrash(BaseException):
+        pass
+
+    class ReplayCapture:
+        def __init__(self, repository: DurableLineageRepository) -> None:
+            self.repository = repository
+            self.fail_after_capture = False
+
+        def capture_live(
+            self, obligation: OriginObligation, attempt_id: str
+        ) -> CaptureBundle:
+            raise AssertionError("live capture is prohibited in replay integration")
+
+        def capture_replay(
+            self,
+            obligation: OriginObligation,
+            attempt_id: str,
+            cutoff: datetime,
+        ) -> CaptureBundle:
+            bundle = self.repository.replay_capture_batch(obligation, attempt_id, cutoff)
+            if self.fail_after_capture:
+                self.fail_after_capture = False
+                raise SimulatedPostCaptureCrash
+            return bundle
+
+    class DisabledMarketCapture:
+        enabled = False
+
+        def capture(
+            self, obligation: OriginObligation, attempt_id: str
+        ) -> CaptureBundle:
+            raise AssertionError("market capture is prohibited in replay integration")
+
+    class Registry:
+        def __init__(self, binding: ArtifactBinding) -> None:
+            self.binding = binding
+
+        def for_origin(self, origin: Origin) -> tuple[ArtifactBinding, ...]:
+            assert origin is self.binding.origin
+            return (self.binding,)
+
+    class Predictor:
+        def predict(
+            self,
+            snapshot: FeatureSnapshot,
+            artifact: ArtifactBinding,
+            *,
+            origin_run_id: str,
+            obligation: OriginObligation,
+            created_at_utc: datetime,
+            context: ForecastExecutionContext,
+        ) -> Prediction:
+            policy_versions = dict(artifact.policy_versions)
+            policy_versions["forecast"] = obligation.policy_version
+            assert context.reconstruction_reason is not None
+            return Prediction(
+                prediction_id=f"prediction-{origin_run_id}",
+                origin_run_id=origin_run_id,
+                canonical_event_id=obligation.event.canonical_event_id,
+                event_version=obligation.event.event_version,
+                origin=obligation.origin,
+                target_at_utc=obligation.window.target_at_utc,
+                decision_at_utc=snapshot.decision_at_utc,
+                model_lane=artifact.model_lane,
+                model_role=artifact.model_role,
+                model_artifact_id=artifact.artifact_id,
+                calibrator_artifact_id=artifact.expected_calibrator_artifact_id,
+                feature_snapshot_id=snapshot.snapshot_id,
+                market_snapshot_id=None,
+                p_home=Decimal("0.55"),
+                p_away=Decimal("0.43"),
+                p_tie=Decimal("0.02"),
+                predicted_winner="home",
+                provenance_grade=context.provenance_grade,
+                status=PredictionStatus.COMPLETE,
+                reason_codes=[context.reconstruction_reason],
+                code_sha=BUILD.code_sha,
+                policy_versions=policy_versions,
+                created_at_utc=created_at_utc,
+            )
+
+    class UnusedMarketLayer:
+        def evaluate(self, *args: object) -> object:
+            raise AssertionError("market evaluation is prohibited in replay integration")
+
+    data_root = tmp_path / "private-data"
+    data_root.mkdir()
+    lineage = DurableLineageRepository(tmp_path / "lineage", data_root)
+    obligation = _obligation()
+    source_manifests = (
+        _manifest(capture_id="schedule-source", run_id="archive-source"),
+        _manifest(capture_id="pbp-source", run_id="archive-source"),
+    )
+    source_facts = _normalizer().normalize_capture(
+        _ipc(_schedules()),
+        source_manifests[0],
+        _ipc(_pbp()),
+        source_manifests[1],
+        obligation.event,
+    )
+    source_batch = lineage.publish_capture_batch(
+        obligation,
+        "archive-source",
+        source_manifests,
+        source_facts,
+    )
+    policy = load_feature_policy("configs/feature_policy_v1.toml")
+    feature_builder = FeatureBuilder(
+        lineage,
+        policy,
+        VenueStore.from_csv("configs/venues_v1.csv"),
+        PointInTimeRatingService(policy=policy),
+    )
+    replay_capture = ReplayCapture(lineage)
+    replay_repository = DurableForecastRepository(tmp_path / "forecast-replay", "replay")
+    attempt_ids = iter(
+        ("replay-one", "replay-two", "replay-crashed", "replay-retry")
+    )
+    binding = ArtifactBinding(
+        artifact_id="champion-replay",
+        origin=obligation.origin,
+        model_role="champion",
+        frozen=True,
+        verified=True,
+        feature_policy_version=policy.policy_version,
+        feature_schema_version=policy.schema_version,
+    )
+    workflow = ForecastWorkflow(
+        repositories=ForecastRepositories(
+            DurableForecastRepository(tmp_path / "forecast-live", "prospective"),
+            replay_repository,
+        ),
+        required_capture=replay_capture,
+        market_capture=DisabledMarketCapture(),
+        feature_builder=feature_builder,
+        lineage_repository=lineage,
+        artifact_registry=Registry(binding),
+        predictor=Predictor(),
+        market_layer=UnusedMarketLayer(),
+        clock=lambda: NOW + timedelta(minutes=2),
+        code_sha=BUILD.code_sha,
+        id_factory=attempt_ids.__next__,
+    )
+    cutoff = NOW + timedelta(minutes=1)
+    contexts = (
+        ForecastExecutionContext.replay(cutoff, "RECONSTRUCTION_ONE"),
+        ForecastExecutionContext.replay(cutoff, "RECONSTRUCTION_TWO"),
+        ForecastExecutionContext.replay(cutoff, "RECONSTRUCTION_RETRY"),
+    )
+
+    first = workflow.run(obligation, "fixture", contexts[0])
+    second = workflow.run(obligation, "fixture", contexts[1])
+    replay_capture.fail_after_capture = True
+    with pytest.raises(SimulatedPostCaptureCrash):
+        workflow.run(obligation, "fixture", contexts[2])
+    retried = workflow.run(obligation, "fixture", contexts[2])
+
+    assert first is not None and first.status == "FOOTBALL_ONLY"
+    assert second is not None and second.status == "FOOTBALL_ONLY"
+    assert retried is not None and retried.status == "FOOTBALL_ONLY"
+    batches = {batch.attempt_id: batch for batch in lineage._iter_batches()}
+    source_batch_id = f"{source_batch.obligation_id}|{source_batch.attempt_id}"
+    assert source_batch.replay_source_batch_id is None
+    assert {
+        batch.replay_source_batch_id
+        for attempt_id, batch in batches.items()
+        if attempt_id != source_batch.attempt_id
+    } == {source_batch_id}
+
+    successful_runs = (
+        (contexts[0], first),
+        (contexts[1], second),
+        (contexts[2], retried),
+    )
+    selected_fact_sets: list[set[str]] = []
+    selected_manifest_sets: list[set[str]] = []
+    for context, run in successful_runs:
+        graph = replay_repository.load_committed_graph(
+            ForecastWorkflow._execution_key(obligation, context)
+        )
+        assert graph.snapshot is not None
+        current_batch = batches[run.attempt_ids[0]]
+        current_manifest_ids = set(current_batch.manifest_ids)
+        current_fact_ids = set(current_batch.fact_ids)
+        assert set(graph.snapshot.input_manifest_ids) == current_manifest_ids
+        assert set(graph.snapshot.input_fact_ids) <= current_fact_ids
+        assert all(fact.capture_id in current_manifest_ids for fact in graph.facts)
+        assert all(
+            set(fact.lineage_capture_ids) <= current_manifest_ids
+            for fact in graph.facts
+        )
+        selected_fact_sets.append(set(graph.snapshot.input_fact_ids))
+        selected_manifest_sets.append(current_manifest_ids)
+
+    assert all(
+        left.isdisjoint(right)
+        for index, left in enumerate(selected_fact_sets)
+        for right in selected_fact_sets[index + 1 :]
+    )
+    assert all(
+        left.isdisjoint(right)
+        for index, left in enumerate(selected_manifest_sets)
+        for right in selected_manifest_sets[index + 1 :]
+    )
+    crashed_batch = batches["replay-crashed"]
+    retry_batch = batches["replay-retry"]
+    assert set(crashed_batch.manifest_ids).isdisjoint(retry_batch.manifest_ids)
+    assert set(crashed_batch.fact_ids).isdisjoint(retry_batch.fact_ids)
+    assert selected_manifest_sets[-1] == set(retry_batch.manifest_ids)
+    assert selected_fact_sets[-1] <= set(retry_batch.fact_ids)
 
 
 def test_direct_pbp_normalization_without_explicit_schedules_fails_closed() -> None:

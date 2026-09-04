@@ -335,12 +335,13 @@ class FeatureBuilder:
         self.clock: MutableClock | None = None
         self.fail = False
 
-    def build(self, event, origin, cutoff, mode):
+    def build(self, event, origin, cutoff, mode, facts=None):
         self.cutoffs.append(cutoff)
         if self.advance_to is not None and self.clock is not None:
             self.clock.set(self.advance_to)
         if self.fail:
             raise RuntimeError("feature failed")
+        fact = self.fact if facts is None else next(iter(facts))
         snapshot = FeatureSnapshot(
             snapshot_id=f"snapshot-{len(self.cutoffs)}",
             canonical_event_id=event.canonical_event_id,
@@ -350,8 +351,8 @@ class FeatureBuilder:
             feature_policy_version="features-v1",
             feature_schema_version="schema-v1",
             values={"strength": 0.25},
-            input_manifest_ids=[self.fact.capture_id],
-            input_fact_ids=[self.fact.fact_id],
+            input_manifest_ids=[fact.capture_id],
+            input_fact_ids=[fact.fact_id],
             join_policy_version="asof-v1",
             provenance_grade=(ProvenanceGrade.A if mode == "live" else ProvenanceGrade.C),
             feature_vector_sha256="b" * 64,
@@ -953,7 +954,7 @@ def test_snapshot_accepts_derived_fact_when_all_input_capture_manifests_are_exac
         captured_schedule = schedule.model_copy(update={"run_id": attempt_id})
         captured.update({captured_schedule.capture_id: captured_schedule, current.capture_id: current})
         return CaptureBundle(
-            records=(captured_schedule, current),
+            records=(captured_schedule, current, derived),
             payload={"football": True},
         )
 
@@ -968,11 +969,12 @@ def test_snapshot_accepts_derived_fact_when_all_input_capture_manifests_are_exac
 
 
 def test_snapshot_rejects_derived_fact_missing_secondary_input_manifest() -> None:
-    item, _, _, _, _, builder, predictor, _, workflow = build_workflow()
+    item, _, _, required, _, builder, predictor, _, workflow = build_workflow()
     derived = workflow.lineage_repository.fact.model_copy(
         update={"input_capture_ids": ("schedule-1", "capture-1")}
     )
     workflow.lineage_repository.fact = derived
+    required.fact = derived
     builder.fact = derived
 
     run = workflow.run(item, "fixture")
@@ -1723,6 +1725,36 @@ def test_decode_committed_graph_rejects_missing_and_extra_prediction_lineage(
     with pytest.raises(DataIntegrityError):
         forecast_module.DurableForecastRepository.decode_committed_graph(
             dangling,
+            artifact_resolver=repository.artifact_resolver,
+        )
+
+
+def test_decode_committed_graph_rejects_missing_secondary_fact_lineage(
+    tmp_path: Path,
+) -> None:
+    item, clock, _, _, workflow, repository = _durable_workflow(tmp_path)
+    clock.set(item.window.target_at_utc)
+    run = workflow.run(
+        item,
+        "fixture",
+        ForecastExecutionContext.live(item.window.target_at_utc),
+    )
+    assert run is not None
+    encoded = forecast_module.DurableForecastRepository.encode_committed_graph(
+        repository.load_committed_graph(item.idempotency_key)
+    )
+    facts = encoded["facts"]
+    assert isinstance(facts, list)
+    first_fact = facts[0]
+    assert isinstance(first_fact, dict)
+    primary_capture_id = first_fact["capture_id"]
+    assert isinstance(primary_capture_id, str)
+    first_fact["input_capture_ids"] = [primary_capture_id, "missing-secondary-capture"]
+    NormalizedFact.model_validate(first_fact)
+
+    with pytest.raises(DataIntegrityError, match="fact lineage"):
+        forecast_module.DurableForecastRepository.decode_committed_graph(
+            encoded,
             artifact_resolver=repository.artifact_resolver,
         )
 

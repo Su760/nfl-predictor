@@ -248,6 +248,72 @@ def test_publication_validates_model_copy_fact_before_any_marker_and_allows_retr
     assert list(runtime_fixture.lineage.iter_facts()) == [fact]
 
 
+def test_replay_validates_before_writes_and_allows_corrected_same_identity_retry(
+    runtime_fixture: RuntimeFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event = runtime_fixture.event()
+    obligation = OriginObligation(
+        event=event,
+        window=event_forecast_origin(event),
+        policy_version="forecast-v1",
+    )
+    manifest = runtime_fixture.manifest()
+    fact = runtime_fixture.fact()
+    runtime_fixture.lineage.publish_capture_batch(
+        obligation, "attempt-1", (manifest,), (fact,)
+    )
+    marker_root = runtime_fixture.lineage.ledger.root / "commits"
+    markers_before = set(marker_root.rglob("*.json"))
+    original_replay_fact = runtime_fixture.lineage._replay_fact
+    malformed_fact_ids: list[str] = []
+
+    def malformed_replay_fact(
+        source: NormalizedFact,
+        capture_ids: dict[str, str],
+        attempt_id: str,
+    ) -> NormalizedFact:
+        reconstructed = original_replay_fact(source, capture_ids, attempt_id)
+        malformed_fact_ids.append(reconstructed.fact_id)
+        return reconstructed.model_copy(
+            update={
+                "input_capture_ids": (
+                    reconstructed.capture_id,
+                    reconstructed.capture_id,
+                )
+            }
+        )
+
+    with monkeypatch.context() as patch:
+        patch.setattr(runtime_fixture.lineage, "_replay_fact", malformed_replay_fact)
+        with pytest.raises(ValidationError, match="input capture IDs"):
+            runtime_fixture.lineage.replay_capture_batch(
+                obligation, "replay-1", runtime_fixture.instant()
+            )
+
+    assert set(marker_root.rglob("*.json")) == markers_before
+
+    replay = runtime_fixture.lineage.replay_capture_batch(
+        obligation, "replay-1", runtime_fixture.instant()
+    )
+    replay_manifest = next(
+        row for row in replay.records if isinstance(row, CaptureManifest)
+    )
+    replay_fact = next(row for row in replay.records if isinstance(row, NormalizedFact))
+    expected_markers = {
+        runtime_fixture.lineage.ledger.marker_path(
+            "capture-manifest-v1", replay_manifest.capture_id
+        ),
+        runtime_fixture.lineage.ledger.marker_path("normalized-fact-v1", replay_fact.fact_id),
+        runtime_fixture.lineage.ledger.marker_path(
+            "capture-batch-v1", f"{obligation.idempotency_key}|replay-1"
+        ),
+    }
+
+    assert replay_fact.fact_id == malformed_fact_ids[0]
+    assert set(marker_root.rglob("*.json")) == markers_before | expected_markers
+
+
 def test_capture_batch_requires_every_derived_fact_input_capture_manifest(
     runtime_fixture: RuntimeFixture,
 ) -> None:

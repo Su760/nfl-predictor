@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import fcntl
+import inspect
 import json
 import os
 import re
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -567,6 +568,10 @@ def validate_committed_graph(
             len(facts) != len(graph.facts)
             or tuple(item.fact_id for item in graph.facts) != tuple(snapshot.input_fact_ids)
             or any(item.capture_id not in snapshot.input_manifest_ids for item in graph.facts)
+            or any(
+                not set(item.lineage_capture_ids).issubset(snapshot.input_manifest_ids)
+                for item in graph.facts
+            )
         ):
             raise DataIntegrityError("committed forecast fact lineage is invalid")
         if obligation.mode == "live" and (
@@ -850,7 +855,12 @@ class OptionalMarketCapture(Protocol):
 
 class SnapshotBuilder(Protocol):
     def build(
-        self, event: object, origin: Origin, cutoff: datetime, mode: str
+        self,
+        event: object,
+        origin: Origin,
+        cutoff: datetime,
+        mode: str,
+        facts: Sequence[NormalizedFact] | None = None,
     ) -> FeatureSnapshot: ...
 
 
@@ -1072,8 +1082,16 @@ class ForecastWorkflow:
             decision_at = context.as_of_utc if context.mode == "replay" else self.clock()
             if decision_at is None:
                 raise ValueError("forecast decision cutoff is missing")
-            snapshot = self.feature_builder.build(
-                obligation.event, obligation.origin, decision_at, mode=context.mode
+            snapshot = self._build_snapshot(
+                obligation.event,
+                obligation.origin,
+                decision_at,
+                mode=context.mode,
+                facts=tuple(
+                    record
+                    for record in football.records
+                    if isinstance(record, NormalizedFact)
+                ),
             )
             if self._live_after_close(obligation, context):
                 return self._late_terminal(repository, obligation, attempt, context)
@@ -1302,6 +1320,23 @@ class ForecastWorkflow:
         if context.as_of_utc is None:
             raise ValueError("replay context requires a cutoff")
         return context.as_of_utc
+
+    def _build_snapshot(
+        self,
+        event: EventVersion,
+        origin: Origin,
+        cutoff: datetime,
+        *,
+        mode: str,
+        facts: Sequence[NormalizedFact],
+    ) -> FeatureSnapshot:
+        parameters = inspect.signature(self.feature_builder.build).parameters.values()
+        if not any(
+            parameter.name == "facts" or parameter.kind is inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters
+        ):
+            return self.feature_builder.build(event, origin, cutoff, mode)
+        return self.feature_builder.build(event, origin, cutoff, mode, facts=facts)
 
     @staticmethod
     def _required_manifests(

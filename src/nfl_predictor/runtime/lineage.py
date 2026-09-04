@@ -70,6 +70,7 @@ class CaptureBatch(BaseModel):
     attempt_id: str
     manifest_ids: tuple[str, ...]
     fact_ids: tuple[str, ...]
+    replay_source_batch_id: str | None = None
 
     @model_validator(mode="after")
     def require_exact_identifiers(self) -> CaptureBatch:
@@ -81,6 +82,8 @@ class CaptureBatch(BaseModel):
         )
         if any(not value.strip() for value in values):
             raise ValueError("capture batch identifiers must be non-blank")
+        if self.replay_source_batch_id is not None and not self.replay_source_batch_id.strip():
+            raise ValueError("capture batch replay source ID must be non-blank")
         if len(set(self.manifest_ids)) != len(self.manifest_ids):
             raise ValueError("capture batch manifest IDs must be unique")
         if len(set(self.fact_ids)) != len(self.fact_ids):
@@ -111,6 +114,8 @@ class DurableLineageRepository:
         attempt_id: str,
         manifests: Sequence[CaptureManifest],
         facts: Sequence[NormalizedFact],
+        *,
+        replay_source_batch_id: str | None = None,
     ) -> CaptureBatch:
         """Publish capture records atomically at the batch-marker visibility boundary."""
         manifest_items = tuple(
@@ -119,10 +124,22 @@ class DurableLineageRepository:
         fact_items = tuple(
             NormalizedFact.model_validate(fact.model_dump()) for fact in facts
         )
-        self._validated_capture_batch(obligation, attempt_id, manifest_items, fact_items)
+        self._validated_capture_batch(
+            obligation,
+            attempt_id,
+            manifest_items,
+            fact_items,
+            replay_source_batch_id=replay_source_batch_id,
+        )
         self.append_manifests(manifest_items)
         self.append_facts(fact_items)
-        return self.append_capture_batch(obligation, attempt_id, manifest_items, fact_items)
+        return self.append_capture_batch(
+            obligation,
+            attempt_id,
+            manifest_items,
+            fact_items,
+            replay_source_batch_id=replay_source_batch_id,
+        )
 
     def append_capture_batch(
         self,
@@ -130,10 +147,18 @@ class DurableLineageRepository:
         attempt_id: str,
         manifests: Sequence[CaptureManifest],
         facts: Sequence[NormalizedFact],
+        *,
+        replay_source_batch_id: str | None = None,
     ) -> CaptureBatch:
         manifest_items = tuple(manifests)
         fact_items = tuple(facts)
-        batch = self._validated_capture_batch(obligation, attempt_id, manifest_items, fact_items)
+        batch = self._validated_capture_batch(
+            obligation,
+            attempt_id,
+            manifest_items,
+            fact_items,
+            replay_source_batch_id=replay_source_batch_id,
+        )
         manifest_ids = batch.manifest_ids
         fact_ids = batch.fact_ids
         try:
@@ -152,6 +177,8 @@ class DurableLineageRepository:
         attempt_id: str,
         manifests: Sequence[CaptureManifest],
         facts: Sequence[NormalizedFact],
+        *,
+        replay_source_batch_id: str | None = None,
     ) -> CaptureBatch:
         if not isinstance(attempt_id, str) or not attempt_id.strip():
             raise DataIntegrityError("capture batch attempt ID must be non-blank")
@@ -171,6 +198,7 @@ class DurableLineageRepository:
             attempt_id=attempt_id,
             manifest_ids=manifest_ids,
             fact_ids=fact_ids,
+            replay_source_batch_id=replay_source_batch_id,
         )
 
     def replay_capture_batch(
@@ -178,7 +206,10 @@ class DurableLineageRepository:
     ) -> CaptureBundle:
         candidates: list[tuple[CaptureBatch, list[CaptureManifest], list[NormalizedFact]]] = []
         for batch in self._iter_batches():
-            if batch.obligation_id != obligation.idempotency_key:
+            if (
+                batch.obligation_id != obligation.idempotency_key
+                or batch.replay_source_batch_id is not None
+            ):
                 continue
             manifests = self.resolve_manifests(list(batch.manifest_ids))
             facts = self.resolve_facts(list(batch.fact_ids))
@@ -188,16 +219,23 @@ class DurableLineageRepository:
                 candidates.append((batch, manifests, facts))
         if not candidates:
             raise DataIntegrityError("no archived capture batch exists at the requested cutoff")
-        _, manifests, facts = max(
-            candidates,
-            key=lambda item: (
-                max(manifest.response_received_at_utc for manifest in item[1]),
-                item[0].attempt_id,
-            ),
+        latest_received_at = max(
+            max(manifest.response_received_at_utc for manifest in manifests)
+            for _, manifests, _ in candidates
         )
+        latest = [
+            item
+            for item in candidates
+            if max(manifest.response_received_at_utc for manifest in item[1])
+            == latest_received_at
+        ]
+        if len(latest) != 1:
+            raise DataIntegrityError("archived capture batch source is ambiguous at cutoff")
+        source_batch, manifests, facts = latest[0]
         reconstructed_manifests = tuple(
-            manifest.model_copy(
-                update={
+            CaptureManifest.model_validate(
+                {
+                    **manifest.model_dump(),
                     "capture_id": self._replay_capture_id(manifest.capture_id, attempt_id),
                     "run_id": attempt_id,
                 }
@@ -211,9 +249,13 @@ class DurableLineageRepository:
         reconstructed_facts = tuple(
             self._replay_fact(fact, capture_ids, attempt_id) for fact in facts
         )
-        self.append_manifests(reconstructed_manifests)
-        self.append_facts(reconstructed_facts)
-        self.append_capture_batch(obligation, attempt_id, reconstructed_manifests, reconstructed_facts)
+        self.publish_capture_batch(
+            obligation,
+            attempt_id,
+            reconstructed_manifests,
+            reconstructed_facts,
+            replay_source_batch_id=self._batch_key(source_batch),
+        )
         return CaptureBundle(
             records=(*reconstructed_manifests, *reconstructed_facts),
             payload={"fact_ids": [fact.fact_id for fact in reconstructed_facts]},
@@ -419,8 +461,9 @@ class DurableLineageRepository:
                 "reason": "archived-capture-batch-v1",
             }
         )
-        return fact.model_copy(
-            update={
+        return NormalizedFact.model_validate(
+            {
+                **fact.model_dump(),
                 "fact_id": fact_id,
                 "capture_id": capture_id,
                 "input_capture_ids": input_capture_ids,
