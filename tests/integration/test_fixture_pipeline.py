@@ -1,83 +1,152 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import socket
+from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
+import httpx
+import numpy as np
+import polars as pl
 import pytest
 
-from nfl_predictor.betting.settlement import OperatorSettlementEvidence
+from nfl_predictor.betting.policy import (
+    BookSettlementContract,
+    CalibrationBinEvidence,
+    CandidateContext,
+    CandidatePolicy,
+    InMemoryDecisionRepository,
+    load_odds_policy,
+)
 from nfl_predictor.capture.service import CaptureService
 from nfl_predictor.contracts.betting import BettingDecision
-from nfl_predictor.contracts.enums import Origin, PredictionStatus, ProvenanceGrade, SnapshotStatus
+from nfl_predictor.contracts.enums import Origin
 from nfl_predictor.contracts.events import EventVersion, ForecastOrigin
-from nfl_predictor.contracts.forecasts import Prediction
-from nfl_predictor.contracts.lineage import CaptureManifest, FeatureSnapshot, NormalizedFact
-from nfl_predictor.contracts.markets import (
-    ActualTicket,
-    DisplayedQuoteCandidate,
-    MarketComparator,
-    MoneylineQuote,
-    MoneylineSelection,
-)
+from nfl_predictor.contracts.markets import DisplayedQuoteCandidate
 from nfl_predictor.evaluation.promotion import load_evaluation_policy
+from nfl_predictor.features.builder import FeatureBuilder
+from nfl_predictor.features.policy import load_feature_policy
+from nfl_predictor.features.schema import FEATURE_SCHEMA_V1
+from nfl_predictor.features.team_strength import PointInTimeRatingService
+from nfl_predictor.features.venue import VenueStore
 from nfl_predictor.identity.origins import OriginObligation
-from nfl_predictor.sources.base import BuildIdentity, RawResponse
-from nfl_predictor.sources.outcomes import OutcomeAdapter
-from nfl_predictor.workflows import outcomes as outcomes_module
+from nfl_predictor.markets.budget import InMemoryBudgetRepository, OddsBudget
+from nfl_predictor.models.artifacts import ArtifactMetadata, ArtifactStore
+from nfl_predictor.models.tie import TieLayer
+from nfl_predictor.runtime.artifacts import (
+    FrozenForecastArtifact,
+    VerifiedArtifactRegistry,
+    VerifiedForecastPredictor,
+)
+from nfl_predictor.runtime.capture import (
+    ArrowOutcomeAdapter,
+    NflverseFootballNormalizer,
+    OptionalOddsCapture,
+    RequiredFootballCapture,
+)
+from nfl_predictor.runtime.lineage import DurableLineageRepository
+from nfl_predictor.runtime.markets import (
+    DurableCalibrationBins,
+    FrozenCalibrationBin,
+    ProductionMarketLayer,
+)
+from nfl_predictor.sources.base import BuildIdentity
+from nfl_predictor.sources.nflverse import NflverseAdapter
+from nfl_predictor.sources.odds_api import OddsApiAdapter
 from nfl_predictor.workflows.forecast import (
-    ArtifactBinding,
-    CaptureBundle,
     DurableForecastRepository,
     ForecastExecutionContext,
     ForecastRepositories,
     ForecastWorkflow,
-    MarketEvaluation,
 )
-from nfl_predictor.workflows.outcomes import OutcomeWorkflow
+from nfl_predictor.workflows.outcomes import DurableOutcomeReportRepository, OutcomeWorkflow
 from nfl_predictor.workflows.report import ReportWorkflow
 
-NOW = datetime(2026, 9, 14, 1, 0, tzinfo=UTC)
-KICKOFF = NOW + timedelta(hours=1)
+ROOT = Path(__file__).resolve().parents[2]
+NOW = datetime(2026, 9, 10, 22, 0, tzinfo=UTC)
+KICKOFF = datetime(2026, 9, 13, 22, 0, tzinfo=UTC)
+OUTCOME_AT = datetime(2026, 9, 14, 3, 0, tzinfo=UTC)
 CODE_SHA = "1" * 40
 LOCK_SHA = "2" * 64
-ROOT = Path(__file__).resolve().parents[2]
-EVALUATION_POLICY = load_evaluation_policy(ROOT / "configs" / "evaluation_policy_v1.toml")
+ARTIFACT_ID = "fixture-champion-t72"
 
 
-class FixtureSource:
-    source = "fixture-football"
+@dataclass(frozen=True)
+class DeterministicModel:
+    def predict_r_home(self, features: np.ndarray) -> np.ndarray:
+        assert features.shape == (1, len(FEATURE_SCHEMA_V1))
+        assert features.dtype == np.float64
+        return np.asarray([0.60], dtype=np.float64)
 
-    def __init__(self, payload: bytes, source: str | None = None) -> None:
-        self.payload = payload
-        if source is not None:
-            self.source = source
 
-    def fetch(self, request: dict[str, object]) -> RawResponse:
-        return RawResponse(
-            source=self.source,
-            request_fingerprint="fixture-only",
-            request_started_at_utc=NOW - timedelta(seconds=2),
-            response_received_at_utc=NOW - timedelta(seconds=1),
-            http_status=200,
-            payload=self.payload,
-            allowlisted_headers={},
+@dataclass(frozen=True)
+class DeterministicCalibrator:
+    def transform(self, values: Sequence[float]) -> np.ndarray:
+        assert values == [0.60]
+        return np.asarray([0.60], dtype=np.float64)
+
+
+class DeterministicCandidateIds:
+    def candidate(self, **values: Any) -> DisplayedQuoteCandidate:
+        prediction = values["prediction"]
+        quote = values["quote"]
+        return DisplayedQuoteCandidate(
+            candidate_id=f"candidate-{values['side']}",
+            prediction_id=prediction.prediction_id,
+            quote_id=quote.quote_id,
+            origin=prediction.origin,
+            side=values["side"],
+            decision_at_utc=prediction.decision_at_utc,
+            decimal_price=values["price"],
+            raw_p_win=values["raw_p_win"],
+            buffered_p_win=values["buffered_p_win"],
+            p_loss=values["raw_p_loss"],
+            buffered_p_loss=values["buffered_p_loss"],
+            p_push=values["p_push"],
+            displayed_ev_per_unit=values["ev"],
+            quarter_kelly_fraction=values["kelly"],
+            policy_version=values["policy_version"],
+            decision_status="candidate",
+            reason_codes=[],
+        )
+
+    def decision(self, **values: Any) -> BettingDecision:
+        prediction = values["prediction"]
+        return BettingDecision(
+            decision_id=f"decision-{values['side']}",
+            prediction_id=prediction.prediction_id,
+            canonical_event_id=prediction.canonical_event_id,
+            origin=prediction.origin,
+            side=values["side"],
+            quote_id=values["quote_id"],
+            candidate_id=values["candidate_id"],
+            evaluated_at_utc=prediction.decision_at_utc,
+            policy_version=values["policy_version"],
+            status=values["status"],
+            reason_codes=values["reason_codes"],
         )
 
 
-def event() -> EventVersion:
+def _event() -> EventVersion:
     return EventVersion(
-        canonical_event_id="event-1",
+        canonical_event_id="2026_REG_02_GB_CHI",
         event_version=1,
-        source_event_ids={"nflverse": "2026_01_GB_CHI"},
+        source_event_ids={
+            "nflverse": "2026_02_GB_CHI",
+            "the_odds_api": "odds-event-1",
+        },
         season=2026,
         season_type="REG",
-        week=1,
+        week=2,
         home_team="CHI",
         away_team="GB",
         kickoff_at_utc=KICKOFF,
+        venue_id="soldier-field",
         neutral_site=False,
         observed_at_utc=NOW - timedelta(days=7),
         available_at_utc=NOW - timedelta(days=7),
@@ -86,475 +155,380 @@ def event() -> EventVersion:
     )
 
 
-class FixtureLineageRepository:
-    def __init__(self) -> None:
-        self.manifests: dict[str, CaptureManifest] = {}
-        self.facts: dict[str, NormalizedFact] = {}
-
-    def resolve_facts(self, ids: list[str]) -> list[NormalizedFact]:
-        return [self.facts[item] for item in ids]
-
-    def resolve_manifests(self, ids: list[str]) -> list[CaptureManifest]:
-        return [self.manifests[item] for item in ids]
-
-
-class RequiredCapture:
-    def __init__(
-        self, service: CaptureService, source: FixtureSource, repo: FixtureLineageRepository
-    ) -> None:
-        self.service = service
-        self.source = source
-        self.repo = repo
-
-    def capture_live(self, obligation: OriginObligation, attempt_id: str) -> CaptureBundle:
-        manifest = self.service.capture(self.source, {}, attempt_id)
-        self.repo.manifests[manifest.capture_id] = manifest
-        fact = NormalizedFact(
-            fact_id=f"fact-strength-{manifest.capture_id}",
-            capture_id=manifest.capture_id,
-            fact_type="team_strength_prior",
-            entity_keys={"team": "CHI"},
-            payload={"strength": Decimal("0.25")},
-            raw_pointer="$",
-            available_at_utc=manifest.response_received_at_utc,
-            captured_at_utc=manifest.response_received_at_utc,
-            provenance_grade=ProvenanceGrade.A,
-            normalization_schema_version="v1",
-            fact_content_sha256="3" * 64,
-        )
-        self.repo.facts[fact.fact_id] = fact
-        return CaptureBundle((manifest, fact), {"strength": Decimal("0.25")})
-
-    def capture_replay(
-        self, obligation: OriginObligation, attempt_id: str, cutoff: datetime
-    ) -> CaptureBundle:
-        raise AssertionError("fixture prospective run cannot use replay capture")
+def _schedules(*, final: bool) -> pl.DataFrame:
+    return pl.DataFrame(
+        {
+            "game_id": ["2025_01_GB_CHI", "2026_01_SEA_SF", "2026_02_GB_CHI"],
+            "season": [2025, 2026, 2026],
+            "game_type": ["REG", "REG", "REG"],
+            "week": [1, 1, 2],
+            "gameday": ["2025-09-07", "2026-09-06", "2026-09-13"],
+            "gametime": ["18:00", "18:00", "18:00"],
+            "away_team": ["GB", "SEA", "GB"],
+            "home_team": ["CHI", "SF", "CHI"],
+            "away_score": [17, 14, 17 if final else None],
+            "home_score": [20, 21, 24 if final else None],
+            "location": ["Home", "Home", "Home"],
+            "div_game": [True, False, True],
+            "stadium_id": ["soldier-field", "levis-stadium", "soldier-field"],
+        }
+    )
 
 
-class FixtureMarketCapture:
-    enabled = True
-
-    def __init__(self, service: CaptureService, repo: FixtureLineageRepository) -> None:
-        self.service = service
-        self.repo = repo
-
-    def capture(self, obligation: OriginObligation, attempt_id: str) -> CaptureBundle:
-        payload = b'[{"book":"book-a","home":2.0,"away":1.9}]'
-        manifest = self.service.capture(FixtureSource(payload, "fixture-market"), {}, attempt_id)
-        self.repo.manifests[manifest.capture_id] = manifest
-        quote = MoneylineQuote(
-            quote_id="quote-1",
-            capture_id=manifest.capture_id,
-            canonical_event_id=obligation.event.canonical_event_id,
-            source_event_id=obligation.event.source_event_ids["nflverse"],
-            book_key="book-a",
-            book_name="Book A",
-            market_key="h2h",
-            period="full_game",
-            provider_last_update_at_utc=manifest.response_received_at_utc,
-            response_received_at_utc=manifest.response_received_at_utc,
-            capture_lag_seconds=0,
-            provider_update_lag_seconds=0,
-            selections=(
-                MoneylineSelection(
-                    side="home", team="CHI", decimal_price=Decimal(2), raw_pointer="$[0]"
-                ),
-                MoneylineSelection(
-                    side="away",
-                    team="GB",
-                    decimal_price=Decimal("1.9"),
-                    raw_pointer="$[1]",
-                ),
-            ),
-            overtime_included=True,
-            tie_handling="push",
-            market_semantics_version="nfl-h2h-v1",
-            settlement_policy_url="https://example.test/rules",
-            settlement_policy_version="v1",
-            provenance_grade=ProvenanceGrade.A,
-        )
-        second_quote = quote.model_copy(
-            update={
-                "quote_id": "quote-2",
-                "book_key": "book-b",
-                "book_name": "Book B",
-                "selections": (
-                    quote.selections[0].model_copy(update={"decimal_price": Decimal("1.98")}),
-                    quote.selections[1].model_copy(update={"decimal_price": Decimal("1.92")}),
-                ),
-            }
-        )
-        return CaptureBundle((manifest, quote, second_quote), (quote, second_quote))
+def _pbp() -> pl.DataFrame:
+    return pl.DataFrame(
+        {
+            "game_id": [
+                "2025_01_GB_CHI",
+                "2025_01_GB_CHI",
+                "2026_01_SEA_SF",
+                "2026_01_SEA_SF",
+            ],
+            "play_id": [1, 2, 1, 2],
+            "posteam": ["GB", "CHI", "SEA", "SF"],
+            "defteam": ["CHI", "GB", "SF", "SEA"],
+            "passer_player_id": ["qb-gb", "qb-chi", "qb-sea", "qb-sf"],
+            "pass_attempt": [1, 1, 1, 1],
+            "rush_attempt": [0, 0, 0, 0],
+            "epa": [0.1, 0.2, -0.1, 0.3],
+            "qb_epa": [0.1, 0.2, -0.1, 0.3],
+            "cpoe": [1.0, 2.0, -1.0, 3.0],
+        }
+    )
 
 
-class Builder:
-    def __init__(self, repo: FixtureLineageRepository) -> None:
-        self.repo = repo
-
-    def build(self, item: EventVersion, origin: Origin, cutoff: datetime, mode: str):
-        fact = list(self.repo.facts.values())[-1]
-        return FeatureSnapshot(
-            snapshot_id="snapshot-1",
-            canonical_event_id=item.canonical_event_id,
-            event_version=item.event_version,
-            origin=origin,
-            decision_at_utc=cutoff,
-            feature_policy_version="features-v1",
-            feature_schema_version="schema-v1",
-            values={"strength": Decimal("0.25")},
-            input_manifest_ids=[fact.capture_id],
-            input_fact_ids=[fact.fact_id],
-            join_policy_version="asof-v1",
-            provenance_grade=ProvenanceGrade.A,
-            feature_vector_sha256="4" * 64,
-            status=SnapshotStatus.COMPLETE,
-            reason_codes=[],
-        )
+def _sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-class Registry:
-    def for_origin(self, origin: Origin):
-        return (
-            ArtifactBinding(
-                "artifact-1",
-                origin,
-                "champion",
-                True,
-                True,
-                market_policy_version="odds-v1",
-            ),
-        )
+def _registry(private_root: Path) -> VerifiedArtifactRegistry:
+    artifact_root = private_root / "artifacts"
+    metadata = ArtifactMetadata(
+        artifact_id=ARTIFACT_ID,
+        model_family="deterministic-logistic",
+        calibrator_family="deterministic-identity",
+        origin=Origin.T72,
+        model_lane="football_only",
+        feature_schema_version="feature-schema-v1",
+        feature_policy_version="feature-v1",
+        model_policy_version="model-v1",
+        calibration_policy_version="calibration-v1",
+        split_policy_version="split-v1",
+        input_manifest_sha256s=("3" * 64,),
+        training_event_ids=("training-1",),
+        calibration_event_ids=("calibration-1",),
+        training_cutoff_at_utc=NOW - timedelta(days=30),
+        calibration_cutoff_at_utc=NOW - timedelta(days=20),
+        code_sha=CODE_SHA,
+        dependency_lock_sha256=LOCK_SHA,
+        seeds={"model": 1},
+        fold_ledger_path="folds/fixture.json",
+        fold_ledger_sha256="4" * 64,
+        metrics={"brier": 0.20},
+        python_version="3.11.13",
+    )
+    ArtifactStore(artifact_root).save(
+        FrozenForecastArtifact(
+            DeterministicModel(),
+            DeterministicCalibrator(),
+            "fixture-calibrator",
+            TieLayer(0.02),
+        ),
+        metadata,
+    )
+    store = ArtifactStore(artifact_root)
+    registry_path = private_root / "config" / "artifact-registry.json"
+    registry_path.parent.mkdir(parents=True)
+    registry_path.write_text(
+        json.dumps(
+            {
+                "entries": [
+                    {
+                        "artifact_id": ARTIFACT_ID,
+                        "origin": "T72",
+                        "model_role": "champion",
+                        "model_lane": "football_only",
+                        "feature_schema_version": "feature-schema-v1",
+                        "feature_policy_version": "feature-v1",
+                        "policy_versions": {
+                            "model": "model-v1",
+                            "calibration": "calibration-v1",
+                        },
+                        "market_policy_version": "odds-v1",
+                        "candidate_policy_version": "candidate-v1",
+                        "code_sha": CODE_SHA,
+                        "dependency_lock_sha256": LOCK_SHA,
+                        "marker_sha256": _sha(store.marker_path(ARTIFACT_ID)),
+                        "metadata_sha256": _sha(store.metadata_path(ARTIFACT_ID)),
+                        "payload_sha256": _sha(store.payload_path(ARTIFACT_ID)),
+                    }
+                ]
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    return VerifiedArtifactRegistry.from_private_config(
+        private_root, artifact_root, registry_path, _sha(registry_path)
+    )
 
 
-class Predictor:
-    def predict(self, snapshot, artifact, *, origin_run_id, obligation, created_at_utc, context):
-        return Prediction(
-            prediction_id="prediction-1",
-            origin_run_id=origin_run_id,
-            canonical_event_id=obligation.event.canonical_event_id,
-            event_version=obligation.event.event_version,
-            origin=obligation.origin,
-            target_at_utc=obligation.window.target_at_utc,
-            decision_at_utc=snapshot.decision_at_utc,
-            model_lane="football_only",
-            model_role="champion",
-            model_artifact_id=artifact.artifact_id,
-            calibrator_artifact_id="calibrator-artifact-1",
-            feature_snapshot_id=snapshot.snapshot_id,
-            market_snapshot_id=None,
-            p_home=Decimal("0.60"),
-            p_away=Decimal("0.38"),
-            p_tie=Decimal("0.02"),
-            predicted_winner="home",
-            provenance_grade=context.provenance_grade,
-            status=PredictionStatus.COMPLETE,
-            reason_codes=[],
-            code_sha=CODE_SHA,
-            policy_versions={"forecast": obligation.policy_version},
-            created_at_utc=created_at_utc,
-        )
-
-
-class FailingPredictor:
-    def predict(self, snapshot, artifact, *, origin_run_id, obligation, created_at_utc, context):
-        raise RuntimeError("fixture prediction failed")
-
-
-class FixtureMarketLayer:
-    def evaluate(self, prediction, market_payload, decision_at_utc):
-        quote = market_payload[0]
-        comparator = MarketComparator(
-            market_comparator_id="comparator-1",
-            origin_run_id=prediction.origin_run_id,
-            canonical_event_id=prediction.canonical_event_id,
-            origin=prediction.origin,
-            decision_at_utc=decision_at_utc,
-            market_policy_version="odds-v1",
-            quote_ids=[item.quote_id for item in market_payload],
-            r_home_market=Decimal("0.4897435897435897435897435897"),
-            p_tie_shared_prior=prediction.p_tie,
-            provenance_grade=ProvenanceGrade.A,
-        )
-        candidate = DisplayedQuoteCandidate(
-            candidate_id="candidate-1",
-            prediction_id=prediction.prediction_id,
-            quote_id=quote.quote_id,
-            origin=prediction.origin,
-            side="home",
-            decision_at_utc=decision_at_utc,
-            decimal_price=Decimal(2),
-            raw_p_win=Decimal("0.60"),
-            buffered_p_win=Decimal("0.57"),
-            p_loss=Decimal("0.38"),
-            buffered_p_loss=Decimal("0.41"),
-            p_push=Decimal("0.02"),
-            displayed_ev_per_unit=Decimal("0.16"),
-            quarter_kelly_fraction=Decimal("0.04081632653061224489795918368"),
-            policy_version="candidate-v1",
-            decision_status="candidate",
-            reason_codes=[],
-        )
-        decision = BettingDecision(
-            decision_id="decision-1",
-            prediction_id=prediction.prediction_id,
-            canonical_event_id=prediction.canonical_event_id,
-            origin=prediction.origin,
-            side="home",
-            quote_id=quote.quote_id,
-            candidate_id=candidate.candidate_id,
-            evaluated_at_utc=decision_at_utc,
-            policy_version="candidate-v1",
-            status="candidate",
-            reason_codes=[],
-        )
-        return MarketEvaluation(comparator, (decision,), (candidate,), tuple(market_payload))
-
-
+# Catches the production adapters drifting apart while unit-test doubles still agree.
 def test_fixture_source_to_scorecard_chain_never_uses_network(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    attempts = 0
+    network_attempts = 0
 
-    def fail_network(*args, **kwargs):
-        nonlocal attempts
-        attempts += 1
+    def fail_network(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        nonlocal network_attempts
+        network_attempts += 1
         raise AssertionError("network access is forbidden")
 
     monkeypatch.setattr(socket, "socket", fail_network)
     monkeypatch.setattr(socket, "getaddrinfo", fail_network)
-    lineage = FixtureLineageRepository()
-    forecast_root = tmp_path / "forecast-ledger"
-    forecast_repository = DurableForecastRepository(forecast_root, "prospective")
-    source_registry = Registry()
-    target_registry = Registry()
-    capture = CaptureService(
-        tmp_path, lambda _payload, _manifest: None, BuildIdentity(CODE_SHA, LOCK_SHA)
+    private_root = tmp_path / "private"
+    private_root.mkdir()
+    lineage = DurableLineageRepository(private_root / "lineage", private_root)
+    policy = load_feature_policy(ROOT / "configs" / "feature_policy_v1.toml")
+    capture_service = CaptureService(
+        private_root, lambda *_: None, BuildIdentity(CODE_SHA, LOCK_SHA)
+    )
+
+    def load_schedules(*, seasons: list[int]) -> pl.DataFrame:
+        assert seasons == [2025, 2026]
+        return _schedules(final=False)
+
+    def load_pbp(*, seasons: list[int]) -> pl.DataFrame:
+        assert seasons == [2025, 2026]
+        return _pbp()
+
+    football_source = NflverseAdapter(
+        {"schedules": load_schedules, "pbp": load_pbp},
+        lambda: NOW - timedelta(seconds=1),
+    )
+    required_capture = RequiredFootballCapture(
+        capture_service=capture_service,
+        adapter=football_source,
+        normalizer=NflverseFootballNormalizer(policy),
+        lineage=lineage,
+    )
+    settlement_contracts = tuple(
+        BookSettlementContract(
+            book_key=book,
+            market_semantics_version="nfl-h2h-v1",
+            settlement_policy_url=f"https://{book}.test/rules",
+            settlement_policy_version="v1",
+            overtime_included=True,
+            tie_handling="push",
+            verified_on="2026-09-01",
+        )
+        for book in ("book-a", "book-b")
+    )
+    odds_policy = load_odds_policy(ROOT / "configs" / "odds_policy_v1.toml").model_copy(
+        update={
+            "capture_enabled": True,
+            "book_allowlist": ("book-a", "book-b"),
+            "book_settlement_contracts": settlement_contracts,
+        }
+    )
+    odds_http_calls = 0
+
+    def odds_response(request: httpx.Request) -> httpx.Response:
+        nonlocal odds_http_calls
+        odds_http_calls += 1
+        assert request.url.params["apiKey"] == "fixture-key"
+        return httpx.Response(
+            200,
+            headers={
+                "x-requests-used": "1",
+                "x-requests-remaining": "499",
+                "x-requests-last": "1",
+            },
+            json=[
+                {
+                    "id": "odds-event-1",
+                    "sport_key": "americanfootball_nfl",
+                    "sport_title": "NFL",
+                    "commence_time": KICKOFF.isoformat(),
+                    "home_team": "Chicago Bears",
+                    "away_team": "Green Bay Packers",
+                    "bookmakers": [
+                        {
+                            "key": "book-a",
+                            "title": "Book A",
+                            "last_update": (NOW - timedelta(minutes=1)).isoformat(),
+                            "markets": [
+                                {
+                                    "key": "h2h",
+                                    "last_update": (
+                                        NOW - timedelta(minutes=1)
+                                    ).isoformat(),
+                                    "outcomes": [
+                                        {"name": "Chicago Bears", "price": 2.0},
+                                        {"name": "Green Bay Packers", "price": 1.9},
+                                    ],
+                                }
+                            ],
+                        },
+                        {
+                            "key": "book-b",
+                            "title": "Book B",
+                            "last_update": (NOW - timedelta(minutes=1)).isoformat(),
+                            "markets": [
+                                {
+                                    "key": "h2h",
+                                    "last_update": (
+                                        NOW - timedelta(minutes=1)
+                                    ).isoformat(),
+                                    "outcomes": [
+                                        {"name": "Chicago Bears", "price": 1.98},
+                                        {"name": "Green Bay Packers", "price": 1.92},
+                                    ],
+                                }
+                            ],
+                        },
+                    ],
+                }
+            ],
+        )
+
+    odds_http = httpx.Client(transport=httpx.MockTransport(odds_response))
+    optional_odds = OptionalOddsCapture(
+        policy=odds_policy,
+        api_key="fixture-key",
+        budget=OddsBudget(InMemoryBudgetRepository(), odds_policy.monthly_hard_stop),
+        capture_service=capture_service,
+        adapter_factory=lambda key: OddsApiAdapter(key, client=odds_http, clock=lambda: NOW),
+        active_events=lambda: (_event(),),
+        month=lambda _obligation: "2026-09",
+        lineage=lineage,
+    )
+    feature_builder = FeatureBuilder(
+        lineage,
+        policy,
+        VenueStore.from_csv(ROOT / "configs" / "venues_v1.csv"),
+        PointInTimeRatingService(policy=policy),
+    )
+    registry = _registry(private_root)
+    predictor = VerifiedForecastPredictor(registry)
+    candidate_policy = CandidatePolicy(
+        odds_policy,
+        odds_policy,
+        DeterministicCandidateIds(),
+        CandidateContext(
+            ARTIFACT_ID,
+            {"forecast": "forecast-v1", "model": "model-v1"},
+        ),
+        InMemoryDecisionRepository(),
+    )
+    bins = DurableCalibrationBins(
+        private_root,
+        private_root / "config" / "calibration-bins.json",
+        (
+            FrozenCalibrationBin(
+                Decimal("0.30"),
+                Decimal("0.50"),
+                CalibrationBinEvidence(
+                    one_sided_upper_absolute_error=Decimal("0.01"),
+                    sample_count=50,
+                    confidence=0.95,
+                    cutoff_at_utc=NOW - timedelta(days=1),
+                    origin=Origin.T72,
+                    binning_method="equal_count",
+                    out_of_sample=True,
+                    frozen=True,
+                    evidence_id="fixture-away-bin",
+                ),
+            ),
+            FrozenCalibrationBin(
+                Decimal("0.50"),
+                Decimal("0.70"),
+                CalibrationBinEvidence(
+                    one_sided_upper_absolute_error=Decimal("0.01"),
+                    sample_count=50,
+                    confidence=0.95,
+                    cutoff_at_utc=NOW - timedelta(days=1),
+                    origin=Origin.T72,
+                    binning_method="equal_count",
+                    out_of_sample=True,
+                    frozen=True,
+                    evidence_id="fixture-home-bin",
+                ),
+            ),
+        ),
+    )
+    market_layer = ProductionMarketLayer(
+        active_event=lambda event_id: _event()
+        if event_id == _event().canonical_event_id
+        else None,
+        odds_policy=odds_policy,
+        candidate_policy=candidate_policy,
+        calibration_bins=bins,
+        comparator_id=lambda prediction, _quote_ids: f"comparator-{prediction.prediction_id}",
+    )
+    forecast_repository = DurableForecastRepository(
+        private_root / "forecast", "prospective", artifact_resolver=registry
     )
     obligation = OriginObligation(
-        event(), ForecastOrigin.for_kickoff(Origin.T60, KICKOFF), "forecast-v1"
+        _event(), ForecastOrigin.for_kickoff(Origin.T72, KICKOFF), "forecast-v1"
     )
     forecast = ForecastWorkflow(
         repositories=ForecastRepositories(forecast_repository),
-        required_capture=RequiredCapture(capture, FixtureSource(b'{"strength": 0.25}'), lineage),
-        market_capture=FixtureMarketCapture(capture, lineage),
-        feature_builder=Builder(lineage),
+        required_capture=required_capture,
+        market_capture=optional_odds,
+        feature_builder=feature_builder,
         lineage_repository=lineage,
-        artifact_registry=source_registry,
-        predictor=Predictor(),
-        market_layer=FixtureMarketLayer(),
+        artifact_registry=registry,
+        predictor=predictor,
+        market_layer=market_layer,
         clock=lambda: NOW,
         code_sha=CODE_SHA,
-    ).run(
-        obligation,
-        "fixture",
-        ForecastExecutionContext.live(NOW),
-    )
+        id_factory=lambda: "attempt-fixture",
+    ).run(obligation, "fixture", ForecastExecutionContext.live(NOW))
     assert forecast is not None
     assert forecast.status == "COMPLETE", forecast.reason_codes
-    durable_type = getattr(outcomes_module, "DurableOutcomeReportRepository", None)
-    assert durable_type is not None
-    reloaded_forecasts = DurableForecastRepository(
-        forecast_root,
-        "prospective",
-        artifact_resolver=source_registry,
-    )
-    committed_graph = reloaded_forecasts.load_committed_graph(obligation.idempotency_key)
-    assert committed_graph.run == forecast
-    assert len(committed_graph.candidates) == 1
-    assert tuple(item.quote_id for item in committed_graph.quotes) == ("quote-1", "quote-2")
-    durable_state = durable_type(tmp_path / "outcome-report-ledger", target_registry)
-    durable_state.import_forecast_graph(reloaded_forecasts, obligation.idempotency_key)
-    durable_state.import_forecast_graph(reloaded_forecasts, obligation.idempotency_key)
-    assert not (tmp_path / "outcome-report-ledger" / "commits" / "workflow-predictions").exists()
-    assert not (tmp_path / "outcome-report-ledger" / "commits" / "workflow-candidates").exists()
-    imported_graph = durable_type(
-        tmp_path / "outcome-report-ledger", target_registry
-    ).load_forecast_graph(forecast.origin_run_id)
-    imported_candidate = imported_graph.candidates[0]
 
-    def additional_forecast(
-        item: OriginObligation,
-        at: datetime,
-        registry: Registry,
-        predictor: Predictor | FailingPredictor | None = None,
-    ):
-        return ForecastWorkflow(
-            repositories=ForecastRepositories(
-                DurableForecastRepository(forecast_root, "prospective")
-            ),
-            required_capture=RequiredCapture(
-                capture, FixtureSource(b'{"strength": 0.25}'), lineage
-            ),
-            market_capture=FixtureMarketCapture(capture, lineage),
-            feature_builder=Builder(lineage),
-            lineage_repository=lineage,
-            artifact_registry=registry,
-            predictor=predictor or Predictor(),
-            market_layer=FixtureMarketLayer(),
-            clock=lambda: at,
-            code_sha=CODE_SHA,
-        ).run(item, "fixture", ForecastExecutionContext.live(at))
-
-    preopen_obligation = OriginObligation(
-        event(), ForecastOrigin.for_kickoff(Origin.T60, KICKOFF), "forecast-preopen"
+    outcome_repository = DurableOutcomeReportRepository(
+        private_root / "outcomes-and-reports", registry
     )
-    preopen_at = preopen_obligation.window.window_opens_at_utc - timedelta(seconds=1)
-    assert additional_forecast(preopen_obligation, preopen_at, Registry()) is None
-    preopen_record = DurableForecastRepository(forecast_root, "prospective").load_obligation(
-        preopen_obligation.idempotency_key
-    )
-    assert preopen_record is not None
-    durable_state.import_forecast_obligation(
-        DurableForecastRepository(
-            forecast_root,
-            "prospective",
-            artifact_resolver=source_registry,
-        ),
-        preopen_obligation.idempotency_key,
+    outcome_repository.import_forecast_graph(
+        forecast_repository, obligation.idempotency_key
     )
 
-    missed_obligation = OriginObligation(
-        event(), ForecastOrigin.for_kickoff(Origin.T60, KICKOFF), "forecast-missed"
-    )
-    missed_at = missed_obligation.window.window_closes_at_utc + timedelta(seconds=1)
-    missed = additional_forecast(missed_obligation, missed_at, Registry())
-    assert missed is not None and missed.status == "MISSED"
-    durable_state.import_forecast_graph(
-        DurableForecastRepository(
-            forecast_root,
-            "prospective",
-            artifact_resolver=source_registry,
-        ),
-        missed_obligation.idempotency_key,
-    )
+    def load_final_schedules(*, seasons: list[int]) -> pl.DataFrame:
+        assert seasons == [2026]
+        return _schedules(final=True)
 
-    failed_obligation = OriginObligation(
-        event(), ForecastOrigin.for_kickoff(Origin.T60, KICKOFF), "forecast-failed"
+    outcome_source = NflverseAdapter(
+        {"schedules": load_final_schedules},
+        lambda: OUTCOME_AT,
     )
-    failed = additional_forecast(failed_obligation, NOW, Registry(), FailingPredictor())
-    assert failed is not None and failed.status == "FAILED"
-    durable_state.import_forecast_graph(
-        DurableForecastRepository(
-            forecast_root,
-            "prospective",
-            artifact_resolver=source_registry,
-        ),
-        failed_obligation.idempotency_key,
-    )
-    ticket = ActualTicket(
-        ticket_id="ticket-1",
-        candidate_id=imported_candidate.candidate_id,
-        model_attributed=True,
-        operator="book-a",
-        jurisdiction="IL",
-        accepted_at_utc=NOW,
-        accepted_decimal_price=Decimal(2),
-        stake=Decimal(10),
-        currency="USD",
-    )
-    durable_state.register_ticket(ticket)
-    durable_state.register_ticket(
-        ActualTicket(
-            ticket_id="ticket-report-only",
-            candidate_id=None,
-            model_attributed=False,
-            operator="book-a",
-            jurisdiction="IL",
-            accepted_at_utc=NOW,
-            accepted_decimal_price=Decimal(2),
-            stake=Decimal(5),
-            currency="USD",
-        ),
-        canonical_event_id="event-1",
-    )
-    result_bytes = json.dumps(
-        {
-            "game_id": "2026_01_GB_CHI",
-            "game_status": "final",
-            "home_score": 24,
-            "away_score": 17,
-            "home_team": "CHI",
-            "away_team": "GB",
-            "finalized_at_utc": NOW.isoformat(),
+    outcome_adapter = ArrowOutcomeAdapter(capture_service, outcome_source)
+    outcome = OutcomeWorkflow(outcome_adapter, outcome_repository).run(
+        _event(),
+        request={
+            "dataset": "schedules",
+            "seasons": [2026],
+            "source_event_id": "2026_02_GB_CHI",
         },
-        sort_keys=True,
-    ).encode()
-    first_outcome = OutcomeWorkflow(
-        OutcomeAdapter(capture, FixtureSource(result_bytes, "nflverse")),
-        durable_type(tmp_path / "outcome-report-ledger", target_registry),
-    ).run(event(), request={})
-    explicit_evidence = OperatorSettlementEvidence(
-        "evidence-explicit-standard",
-        imported_graph.quotes[0].quote_id,
-        event().canonical_event_id,
-        first_outcome.outcome.outcome_id,
-        first_outcome.outcome.outcome_version,
-        imported_graph.quotes[0].book_key,
-        imported_graph.quotes[0].settlement_policy_url,
-        imported_graph.quotes[0].settlement_policy_version,
-        "final",
-        "standard_confirmed",
-        NOW + timedelta(minutes=1),
-        NOW + timedelta(minutes=1),
     )
-    durable_type(tmp_path / "outcome-report-ledger", target_registry).register_operator_evidence(
-        explicit_evidence
-    )
-    outcome_run = OutcomeWorkflow(
-        OutcomeAdapter(capture, FixtureSource(result_bytes, "nflverse")),
-        durable_type(tmp_path / "outcome-report-ledger", target_registry),
-    ).run(event(), request={})
-    reloaded_state = durable_type(tmp_path / "outcome-report-ledger", target_registry)
     scorecards = ReportWorkflow(
-        reloaded_state,
-        evaluation_policy=EVALUATION_POLICY,
+        outcome_repository,
+        evaluation_policy=load_evaluation_policy(
+            ROOT / "configs" / "evaluation_policy_v1.toml"
+        ),
         interval_confidence=Decimal("0.95"),
-    ).weekly(2026, 1)
+    ).weekly(2026, 2)
 
-    assert forecast is not None and forecast.status == "COMPLETE"
-    assert outcome_run.outcome.result == "home"
-    assert len(outcome_run.settlements) == 2
-    assert outcome_run.report_only_ticket_ids == ("ticket-report-only",)
-    probability = next(
-        row
-        for row in scorecards.probability
-        if row.artifact_id == "artifact-1"
-        and dict(row.policy_versions)["forecast"] == "forecast-v1"
-    )
-    winner = next(
-        row
-        for row in scorecards.winner
-        if row.artifact_id == "artifact-1"
-        and dict(row.policy_versions)["forecast"] == "forecast-v1"
-    )
-    market = next(
-        row
-        for row in scorecards.market
-        if row.artifact_id == "artifact-1"
-        and dict(row.policy_versions)["forecast"] == "forecast-v1"
-    )
+    assert outcome.outcome.result == "home"
+    probability = next(row for row in scorecards.probability if row.artifact_id == ARTIFACT_ID)
+    winner = next(row for row in scorecards.winner if row.artifact_id == ARTIFACT_ID)
+    market = next(row for row in scorecards.market if row.artifact_id == ARTIFACT_ID)
     assert probability.n_all_settled == 1
     assert winner.straight_up_accuracy == 1.0
-    assert market.quote_ids == ("quote-1", "quote-2")
-    assert market.capture_ids == (
-        imported_graph.quotes[0].capture_id,
-        imported_graph.quotes[1].capture_id,
-    )
-    assert scorecards.displayed_price[0].candidate_ids == ("candidate-1",)
-    assert scorecards.actual_tickets[0].ticket_ids == ("ticket-1",)
-    missing_cards = [row for row in scorecards.probability if row.coverage == 0]
-    assert len(missing_cards) == 3
-    assert all(row.n_missing == 1 and row.n_unresolved == 0 for row in missing_cards)
-    assert {
-        bundle.run.status if bundle.run is not None else None
-        for bundle in reloaded_state.forecast_obligation_bundles()
-    } == {None, "COMPLETE", "MISSED", "FAILED"}
-    assert len(tuple((tmp_path / "manifests" / "captures").glob("*.json"))) == 6
-    assert reloaded_state.load_forecast_graph(forecast.origin_run_id) == imported_graph
-    assert reloaded_state.read_prediction("prediction-1") == imported_graph.predictions[0]
-    assert reloaded_state.read_candidate("candidate-1") == imported_candidate
-    assert reloaded_state.quote_for("quote-1") == imported_graph.quotes[0]
-    assert reloaded_state.read_ticket("ticket-1") == ticket
-    assert reloaded_state.report_only_ticket_ids() == ("ticket-report-only",)
-    assert len(reloaded_state.settlement_envelopes()) == 4
-    assert attempts == 0
+    assert market.quote_ids
+    assert optional_odds.enabled is True
+    assert odds_http_calls == 1
+    assert network_attempts == 0
+    odds_http.close()

@@ -508,10 +508,26 @@ def main(
     _validate_task13_arguments(arguments, parser)
     using_offline_services = False
     if services is None:
-        if not _is_offline_preview(arguments):
-            parser.error("production services are not configured")
-        services = _offline_service_registry()
-        using_offline_services = True
+        runtime_config = (
+            environment["NFL_V2_RUNTIME_CONFIG"]
+            if environment is not None and "NFL_V2_RUNTIME_CONFIG" in environment
+            else None
+        )
+        if runtime_config is not None:
+            from nfl_predictor.runtime.services import build_production_runtime
+
+            assert environment is not None
+            runtime = build_production_runtime(
+                Path(runtime_config), environment, clock or (lambda: datetime.now(UTC))
+            )
+            services = runtime.services
+            if scheduler_policy is None:
+                scheduler_policy = runtime.scheduler_policy
+        else:
+            if not _is_offline_preview(arguments):
+                parser.error("production services are not configured")
+            services = _offline_service_registry()
+            using_offline_services = True
     if scheduler_policy is None:
         if not using_offline_services:
             parser.error("scheduler freshness policy is not configured")

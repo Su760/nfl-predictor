@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tomllib
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -10,6 +11,7 @@ import pytest
 from nfl_predictor.cli import SchedulerFreshnessPolicy, ServiceRegistry, build_parser, main
 from nfl_predictor.contracts.enums import ProvenanceGrade
 from nfl_predictor.workflows.forecast import ForecastExecutionContext
+from tests.runtime.test_services import RuntimeTree
 
 NOW = datetime(2026, 9, 13, 19, 25, tzinfo=UTC)
 SCHEDULER_POLICY = SchedulerFreshnessPolicy(
@@ -327,3 +329,33 @@ def test_cli_serializes_typed_results_as_structured_json(
     assert capsys.readouterr().out.strip() == (
         '{"at": "2026-09-13T19:25:00+00:00", "grade": "A", "route": "readiness.check"}'
     )
+
+
+# Catches explicit runtime configuration being ignored in favor of preview-only services.
+def test_cli_builds_production_services_only_with_explicit_runtime_config(
+    tmp_path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    tree = RuntimeTree(tmp_path)
+    environment = {**tree.environment, "NFL_V2_RUNTIME_CONFIG": str(tree.base_config)}
+
+    code = main(["readiness", "check"], environment=environment, clock=lambda: NOW)
+
+    assert code == 0
+    assert json.loads(capsys.readouterr().out)["route"] == "readiness.check"
+
+
+# Catches a live route consulting os.environ and auto-composing without passed authorization.
+def test_cli_never_uses_implicit_process_runtime_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    tree = RuntimeTree(tmp_path)
+    monkeypatch.setenv("NFL_V2_RUNTIME_CONFIG", str(tree.base_config))
+    monkeypatch.setenv(
+        "NFL_V2_ARTIFACT_REGISTRY_SHA256",
+        tree.environment["NFL_V2_ARTIFACT_REGISTRY_SHA256"],
+    )
+
+    with pytest.raises(SystemExit) as error:
+        main(["forecast", "due", "--trigger", "manual"], clock=lambda: NOW)
+
+    assert error.value.code == 2
