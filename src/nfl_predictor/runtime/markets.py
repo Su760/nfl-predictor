@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -24,69 +25,126 @@ from nfl_predictor.markets.comparator import build_market_comparator
 from nfl_predictor.workflows.forecast import MarketEvaluation
 
 
+@dataclass(frozen=True)
+class FrozenCalibrationBin:
+    """Local bin coordinates that preserve the unchanged shared evidence contract."""
+
+    lower: Decimal
+    upper: Decimal
+    evidence: CalibrationBinEvidence
+
+    def __post_init__(self) -> None:
+        if (
+            not self.lower.is_finite()
+            or not self.upper.is_finite()
+            or self.lower < Decimal(0)
+            or self.upper > Decimal(1)
+            or self.lower >= self.upper
+        ):
+            raise ValueError("frozen calibration bin bounds must satisfy 0 <= lower < upper <= 1")
+
+    def contains(self, probability: Decimal) -> bool:
+        return self.lower <= probability < self.upper or (
+            probability == Decimal(1) and self.upper == Decimal(1) and self.lower <= probability
+        )
+
+
+def _private_path(private_root: Path, path: Path) -> tuple[Path, Path]:
+    try:
+        root = private_root.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError("trusted private root must exist") from exc
+    if not root.is_dir():
+        raise ValueError("trusted private root must be a directory")
+    resolved = path.resolve(strict=False)
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("calibration evidence path must resolve under trusted private root") from exc
+    return root, resolved
+
+
 class DurableCalibrationBins:
     """A local immutable evidence store used by the fail-closed candidate policy."""
 
     def __init__(
-        self, path: Path, evidence: Sequence[CalibrationBinEvidence] | None = None
+        self,
+        private_root: Path,
+        path: Path,
+        evidence: Sequence[FrozenCalibrationBin] | None = None,
     ) -> None:
-        self._path = path
+        self._private_root, self._path = _private_path(private_root, path)
         if evidence is not None:
             self._write(tuple(evidence))
 
-    def _write(self, evidence: tuple[CalibrationBinEvidence, ...]) -> None:
-        if len({item.evidence_id for item in evidence}) != len(evidence):
+    def _write(self, evidence: tuple[FrozenCalibrationBin, ...]) -> None:
+        if len({item.evidence.evidence_id for item in evidence}) != len(evidence):
             raise ValueError("calibration evidence IDs must be unique")
-        self._path.parent.mkdir(parents=True, exist_ok=True)
+        _, path = _private_path(self._private_root, self._path)
+        path.parent.mkdir(parents=True, exist_ok=True)
         records = [
             {
-                "one_sided_upper_absolute_error": str(item.one_sided_upper_absolute_error),
-                "sample_count": item.sample_count,
-                "confidence": item.confidence,
-                "cutoff_at_utc": item.cutoff_at_utc.isoformat(),
-                "origin": item.origin.value,
-                "binning_method": item.binning_method,
-                "out_of_sample": item.out_of_sample,
-                "frozen": item.frozen,
-                "evidence_id": item.evidence_id,
+                "lower": str(item.lower),
+                "upper": str(item.upper),
+                "evidence": {
+                    "one_sided_upper_absolute_error": str(
+                        item.evidence.one_sided_upper_absolute_error
+                    ),
+                    "sample_count": item.evidence.sample_count,
+                    "confidence": item.evidence.confidence,
+                    "cutoff_at_utc": item.evidence.cutoff_at_utc.isoformat(),
+                    "origin": item.evidence.origin.value,
+                    "binning_method": item.evidence.binning_method,
+                    "out_of_sample": item.evidence.out_of_sample,
+                    "frozen": item.evidence.frozen,
+                    "evidence_id": item.evidence.evidence_id,
+                },
             }
             for item in evidence
         ]
-        self._path.write_text(json.dumps(records, sort_keys=True), encoding="utf-8")
+        path.write_text(json.dumps(records, sort_keys=True), encoding="utf-8")
 
-    def _read(self) -> tuple[CalibrationBinEvidence, ...]:
+    def _read(self) -> tuple[FrozenCalibrationBin, ...]:
         try:
-            raw = json.loads(self._path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            _, path = _private_path(self._private_root, self._path)
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
             raise ValueError("calibration evidence store is unreadable") from exc
         if not isinstance(raw, list):
             raise TypeError("calibration evidence store must contain a list")
-        records: list[CalibrationBinEvidence] = []
+        records: list[FrozenCalibrationBin] = []
         for item in raw:
             if not isinstance(item, dict):
                 raise TypeError("calibration evidence entry is invalid")
             try:
-                cutoff = datetime.fromisoformat(str(item["cutoff_at_utc"]))
+                stored = item["evidence"]
+                if not isinstance(stored, dict):
+                    raise TypeError("calibration evidence is invalid")
+                cutoff = datetime.fromisoformat(str(stored["cutoff_at_utc"]))
                 if cutoff.tzinfo is None or cutoff.utcoffset() != UTC.utcoffset(cutoff):
                     raise ValueError("calibration evidence cutoff must be UTC")
                 records.append(
-                    CalibrationBinEvidence(
-                        one_sided_upper_absolute_error=Decimal(
-                            str(item["one_sided_upper_absolute_error"])
+                    FrozenCalibrationBin(
+                        lower=Decimal(str(item["lower"])),
+                        upper=Decimal(str(item["upper"])),
+                        evidence=CalibrationBinEvidence(
+                            one_sided_upper_absolute_error=Decimal(
+                                str(stored["one_sided_upper_absolute_error"])
+                            ),
+                            sample_count=stored["sample_count"],
+                            confidence=stored["confidence"],
+                            cutoff_at_utc=cutoff,
+                            origin=Origin(stored["origin"]),
+                            binning_method=stored["binning_method"],
+                            out_of_sample=stored["out_of_sample"],
+                            frozen=stored["frozen"],
+                            evidence_id=stored["evidence_id"],
                         ),
-                        sample_count=item["sample_count"],
-                        confidence=item["confidence"],
-                        cutoff_at_utc=cutoff,
-                        origin=Origin(item["origin"]),
-                        binning_method=item["binning_method"],
-                        out_of_sample=item["out_of_sample"],
-                        frozen=item["frozen"],
-                        evidence_id=item["evidence_id"],
                     )
                 )
             except (KeyError, TypeError, ValueError) as exc:
                 raise ValueError("calibration evidence entry is invalid") from exc
-        if len({item.evidence_id for item in records}) != len(records):
+        if len({item.evidence.evidence_id for item in records}) != len(records):
             raise ValueError("calibration evidence IDs must be unique")
         return tuple(records)
 
@@ -106,7 +164,6 @@ class DurableCalibrationBins:
             or not isinstance(confidence, (int, float))
         ):
             raise TypeError("calibration lookup arguments are invalid")
-        del probability  # Evidence is pre-binned upstream; candidate policy validates the returned record.
         if (
             strictly_before_utc.tzinfo is None
             or strictly_before_utc.utcoffset() != UTC.utcoffset(strictly_before_utc)
@@ -115,19 +172,20 @@ class DurableCalibrationBins:
         eligible = tuple(
             item
             for item in self._read()
-            if item.origin is origin
-            and item.cutoff_at_utc < strictly_before_utc
-            and item.sample_count >= minimum_games
-            and item.confidence == float(confidence)
-            and item.binning_method == "equal_count"
-            and item.out_of_sample is True
-            and item.frozen is True
+            if item.evidence.origin is origin
+            and item.evidence.cutoff_at_utc < strictly_before_utc
+            and item.evidence.sample_count >= minimum_games
+            and item.evidence.confidence == float(confidence)
+            and item.evidence.binning_method == "equal_count"
+            and item.evidence.out_of_sample is True
+            and item.evidence.frozen is True
+            and item.contains(probability)
         )
         if not eligible:
             return None
-        latest = max(item.cutoff_at_utc for item in eligible)
-        selected = tuple(item for item in eligible if item.cutoff_at_utc == latest)
-        return selected[0] if len(selected) == 1 else None
+        if len(eligible) != 1:
+            return None
+        return eligible[0].evidence
 
 
 class ProductionMarketLayer:

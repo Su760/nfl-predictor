@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+import nfl_predictor.runtime.artifacts as runtime_artifacts
 from nfl_predictor.contracts.enums import Origin, ProvenanceGrade, SnapshotStatus
 from nfl_predictor.contracts.events import EventVersion, ForecastOrigin
 from nfl_predictor.contracts.lineage import FeatureSnapshot
@@ -74,7 +75,10 @@ def _metadata(artifact_id: str = "champion-v1", **changes: object) -> ArtifactMe
     return ArtifactMetadata.model_validate(values)
 
 
-def _entry(artifact_id: str = "champion-v1", **changes: object) -> dict[str, object]:
+def _entry(
+    artifact_id: str = "champion-v1", *, root: Path, **changes: object
+) -> dict[str, object]:
+    store = ArtifactStore(root)
     values: dict[str, object] = {
         "artifact_id": artifact_id,
         "origin": "T60",
@@ -87,6 +91,9 @@ def _entry(artifact_id: str = "champion-v1", **changes: object) -> dict[str, obj
         "candidate_policy_version": "candidate-v1",
         "code_sha": "c" * 40,
         "dependency_lock_sha256": "d" * 64,
+        "marker_sha256": _sha(store.marker_path(artifact_id)),
+        "metadata_sha256": _sha(store.metadata_path(artifact_id)),
+        "payload_sha256": _sha(store.payload_path(artifact_id)),
     }
     values.update(changes)
     return values
@@ -96,24 +103,33 @@ def _write_registry(path: Path, entries: list[dict[str, object]]) -> None:
     path.write_text(json.dumps({"entries": entries}, sort_keys=True), encoding="utf-8")
 
 
+def _sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 @pytest.fixture
 def artifact_fixture(tmp_path: Path):
-    root = tmp_path / "artifacts"
-    registry_path = tmp_path / "artifact-registry.json"
+    private_root = tmp_path / "private"
+    root = private_root / "artifacts"
+    registry_path = private_root / "config" / "artifact-registry.json"
+    registry_path.parent.mkdir(parents=True)
     expected = tuple(float(index) for index, _ in enumerate(FEATURE_SCHEMA_V1))
     ArtifactStore(root).save(
         FrozenForecastArtifact(_Model(expected), _Calibrator(), "calibrator-v1", TieLayer(0.02)),
         _metadata(),
     )
-    _write_registry(registry_path, [_entry()])
-    registry = VerifiedArtifactRegistry.from_private_config(root, registry_path)
-    return root, registry_path, registry, expected
+    _write_registry(registry_path, [_entry(root=root)])
+    expected_registry_sha256 = _sha(registry_path)
+    registry = VerifiedArtifactRegistry.from_private_config(
+        private_root, root, registry_path, expected_registry_sha256
+    )
+    return private_root, root, registry_path, registry, expected, expected_registry_sha256
 
 
 # Catches: registry entries becoming trusted without pinned bytes, committed payload verification,
 # or exactly one frozen champion for the requested origin.
 def test_registry_returns_one_verified_frozen_champion_per_origin(artifact_fixture) -> None:
-    _, _, registry, _ = artifact_fixture
+    _, _, _, registry, _, _ = artifact_fixture
 
     bindings = registry.for_origin(Origin.T60)
 
@@ -124,7 +140,7 @@ def test_registry_returns_one_verified_frozen_champion_per_origin(artifact_fixtu
 
 # Catches: a private registry being changed after its reviewed SHA was bound to the runtime.
 def test_registry_rejects_registry_tamper(artifact_fixture) -> None:
-    _, registry_path, registry, _ = artifact_fixture
+    _, _, registry_path, registry, _, _ = artifact_fixture
     registry_path.write_bytes(b"{}")
 
     with pytest.raises(ArtifactIntegrityError, match="registry hash"):
@@ -133,10 +149,10 @@ def test_registry_rejects_registry_tamper(artifact_fixture) -> None:
 
 # Catches: registry duplication silently selecting an arbitrary champion rather than failing closed.
 def test_registry_rejects_multiple_champions_for_one_origin(artifact_fixture) -> None:
-    _, registry_path, _, _ = artifact_fixture
-    _write_registry(registry_path, [_entry(), _entry()])
+    private_root, root, registry_path, _, _, _ = artifact_fixture
+    _write_registry(registry_path, [_entry(root=root), _entry(root=root)])
     registry = VerifiedArtifactRegistry.from_private_config(
-        registry_path.parent / "artifacts", registry_path
+        private_root, root, registry_path, _sha(registry_path)
     )
 
     with pytest.raises(ArtifactIntegrityError, match="exactly one champion"):
@@ -165,10 +181,12 @@ def test_registry_rejects_metadata_or_role_mismatch(
         FrozenForecastArtifact(_Model(tuple(float(i) for i in range(42))), _Calibrator(), "cal", TieLayer(0.02)),
         _metadata(**metadata_change),
     )
-    _write_registry(registry_path, [_entry(**entry_change)])
+    _write_registry(registry_path, [_entry(root=root, **entry_change)])
 
     with pytest.raises(ArtifactIntegrityError):
-        VerifiedArtifactRegistry.from_private_config(root, registry_path).for_origin(Origin.T60)
+        VerifiedArtifactRegistry.from_private_config(
+            tmp_path, root, registry_path, _sha(registry_path)
+        ).for_origin(Origin.T60)
 
 
 # Catches: loaded payloads that do not expose the deterministic model/calibrator/tie bundle.
@@ -177,13 +195,89 @@ def test_registry_rejects_uncommitted_or_wrong_payload_type(tmp_path: Path) -> N
     registry_path = tmp_path / "artifact-registry.json"
     store = ArtifactStore(root)
     store.save(_Model(tuple(float(i) for i in range(42))), _metadata())
-    _write_registry(registry_path, [_entry()])
+    _write_registry(registry_path, [_entry(root=root)])
 
     with pytest.raises(ArtifactIntegrityError, match="FrozenForecastArtifact"):
-        VerifiedArtifactRegistry.from_private_config(root, registry_path).for_origin(Origin.T60)
+        VerifiedArtifactRegistry.from_private_config(
+            tmp_path, root, registry_path, _sha(registry_path)
+        ).for_origin(Origin.T60)
     store.marker_path("champion-v1").unlink()
     with pytest.raises(ArtifactIntegrityError, match="not committed"):
-        VerifiedArtifactRegistry.from_private_config(root, registry_path).for_origin(Origin.T60)
+        VerifiedArtifactRegistry.from_private_config(
+            tmp_path, root, registry_path, _sha(registry_path)
+        ).for_origin(Origin.T60)
+
+
+# Catches: self-pinning a changed registry rather than requiring the independently reviewed digest.
+def test_registry_rejects_independent_registry_digest_mismatch(artifact_fixture) -> None:
+    private_root, root, registry_path, _, _, _ = artifact_fixture
+
+    registry = VerifiedArtifactRegistry.from_private_config(
+        private_root, root, registry_path, "0" * 64
+    )
+
+    with pytest.raises(ArtifactIntegrityError, match="registry hash"):
+        registry.for_origin(Origin.T60)
+
+
+# Catches: code/lock lineage mismatch reaching joblib before the byte preflight rejects it.
+@pytest.mark.parametrize("field", ["code_sha", "dependency_lock_sha256"])
+def test_registry_rejects_wrong_lineage_before_deserialization(
+    artifact_fixture, monkeypatch: pytest.MonkeyPatch, field: str
+) -> None:
+    private_root, root, registry_path, _, _, _ = artifact_fixture
+    changes = {field: "f" * (40 if field == "code_sha" else 64)}
+    _write_registry(registry_path, [_entry(root=root, **changes)])
+    registry = VerifiedArtifactRegistry.from_private_config(
+        private_root, root, registry_path, _sha(registry_path)
+    )
+    calls = 0
+
+    def deserialization_must_not_run(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        raise AssertionError("joblib must not run before lineage verification")
+
+    monkeypatch.setattr(runtime_artifacts.joblib, "load", deserialization_must_not_run)
+    with pytest.raises(ArtifactIntegrityError, match="metadata"):
+        registry.for_origin(Origin.T60)
+    assert calls == 0
+
+
+# Catches: coordinated marker/metadata/payload replacement being accepted when only their
+# self-consistency, rather than registry-anchored digests, is checked.
+def test_registry_rejects_coordinated_artifact_tamper_before_deserialization(
+    artifact_fixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    private_root, root, registry_path, _, _, digest = artifact_fixture
+    store = ArtifactStore(root)
+    store.payload_path("champion-v1").write_bytes(b"tampered-payload")
+    metadata = json.loads(store.metadata_path("champion-v1").read_text(encoding="utf-8"))
+    metadata["payload_sha256"] = _sha(store.payload_path("champion-v1"))
+    store.metadata_path("champion-v1").write_text(json.dumps(metadata), encoding="utf-8")
+    marker = json.loads(store.marker_path("champion-v1").read_text(encoding="utf-8"))
+    marker["payload_sha256"] = _sha(store.payload_path("champion-v1"))
+    marker["metadata_sha256"] = _sha(store.metadata_path("champion-v1"))
+    store.marker_path("champion-v1").write_text(json.dumps(marker), encoding="utf-8")
+    registry = VerifiedArtifactRegistry.from_private_config(private_root, root, registry_path, digest)
+    monkeypatch.setattr(runtime_artifacts.joblib, "load", lambda *_: pytest.fail("loaded"))
+
+    with pytest.raises(ArtifactIntegrityError, match="frozen registry"):
+        registry.for_origin(Origin.T60)
+
+
+# Catches: registry or artifact roots escaping the explicit trusted private root, including via symlink.
+def test_registry_rejects_off_private_root_and_symlink_escape(artifact_fixture, tmp_path: Path) -> None:
+    private_root, root, registry_path, _, _, digest = artifact_fixture
+    outside = tmp_path / "outside.json"
+    outside.write_text(registry_path.read_text(encoding="utf-8"), encoding="utf-8")
+    escaped = private_root / "config" / "escaped.json"
+    escaped.symlink_to(outside)
+
+    with pytest.raises(ValueError, match="private root"):
+        VerifiedArtifactRegistry.from_private_config(private_root, root, outside, digest)
+    with pytest.raises(ValueError, match="private root"):
+        VerifiedArtifactRegistry.from_private_config(private_root, root, escaped, digest)
 
 
 def _snapshot(values: dict[str, float]) -> FeatureSnapshot:
@@ -208,7 +302,7 @@ def _snapshot(values: dict[str, float]) -> FeatureSnapshot:
 
 # Catches: predictor schema-order drift, bypassed calibrator/tie layer, or non-canonical lineage.
 def test_predictor_uses_schema_order_calibrator_and_tie_layer(artifact_fixture) -> None:
-    _, _, registry, expected = artifact_fixture
+    _, _, _, registry, expected, _ = artifact_fixture
     values = {name: expected[index] for index, (name, _) in enumerate(FEATURE_SCHEMA_V1)}
     event = EventVersion(
         canonical_event_id="event-v1", event_version=1, source_event_ids={"nflverse": "e"},

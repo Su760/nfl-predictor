@@ -4,6 +4,8 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 from nfl_predictor.betting.policy import (
     BookSettlementContract,
     CalibrationBinEvidence,
@@ -21,7 +23,11 @@ from nfl_predictor.contracts.markets import (
     MoneylineQuote,
     MoneylineSelection,
 )
-from nfl_predictor.runtime.markets import DurableCalibrationBins, ProductionMarketLayer
+from nfl_predictor.runtime.markets import (
+    DurableCalibrationBins,
+    FrozenCalibrationBin,
+    ProductionMarketLayer,
+)
 
 NOW = datetime(2026, 9, 10, 18, 0, tzinfo=UTC)
 
@@ -112,6 +118,20 @@ def _evidence() -> CalibrationBinEvidence:
     )
 
 
+def _bin(
+    lower: str, upper: str, evidence_id: str, *, error: str = "0.03"
+) -> FrozenCalibrationBin:
+    return FrozenCalibrationBin(
+        lower=Decimal(lower),
+        upper=Decimal(upper),
+        evidence=CalibrationBinEvidence(
+            one_sided_upper_absolute_error=Decimal(error), sample_count=50, confidence=0.95,
+            cutoff_at_utc=NOW - timedelta(seconds=1), origin=Origin.T60,
+            binning_method="equal_count", out_of_sample=True, frozen=True, evidence_id=evidence_id,
+        ),
+    )
+
+
 def _layer(bins: DurableCalibrationBins) -> ProductionMarketLayer:
     policy = _policy()
     candidates = CandidatePolicy(
@@ -129,26 +149,75 @@ def _layer(bins: DurableCalibrationBins) -> ProductionMarketLayer:
 # Catches: persisted evidence returned despite being unfrozen, in-sample, wrong-origin, or not
 # strictly older than the decision time.
 def test_calibration_bins_return_only_eligible_historical_evidence(tmp_path: Path) -> None:
-    bins = DurableCalibrationBins(tmp_path / "calibration.json", (_evidence(),))
+    private_root = tmp_path / "private"
+    private_root.mkdir()
+    bins = DurableCalibrationBins(private_root, private_root / "calibration.json", (_bin("0", "1", "evidence-v1"),))
 
     found = bins.lookup(origin=Origin.T60, probability=Decimal("0.55"), strictly_before_utc=NOW,
                         minimum_games=50, confidence=0.95)
 
-    assert found == _evidence()
-    ineligible = _evidence().__class__(
-        **{**_evidence().__dict__, "frozen": False, "evidence_id": "unfrozen"}
+    assert found == _bin("0", "1", "evidence-v1").evidence
+    ineligible = _bin("0", "1", "unfrozen").evidence.__class__(
+        **{**_bin("0", "1", "unfrozen").evidence.__dict__, "frozen": False}
     )
-    assert DurableCalibrationBins(tmp_path / "invalid.json", (ineligible,)).lookup(
+    assert DurableCalibrationBins(
+        private_root, private_root / "invalid.json", (FrozenCalibrationBin(Decimal(0), Decimal(1), ineligible),)
+    ).lookup(
         origin=Origin.T60, probability=Decimal("0.55"), strictly_before_utc=NOW,
         minimum_games=50, confidence=0.95,
     ) is None
+
+
+# Catches: returning a same-origin latest record for both sides instead of the frozen bin that
+# contains each requested probability.
+def test_calibration_bins_select_distinct_home_and_away_probability_ranges(tmp_path: Path) -> None:
+    private_root = tmp_path / "private"
+    private_root.mkdir()
+    bins = DurableCalibrationBins(
+        private_root,
+        private_root / "calibration.json",
+        (
+            _bin("0.40", "0.50", "away-bin"),
+            _bin("0.50", "0.60", "home-bin"),
+            _bin("0.60", "1", "ceiling-bin"),
+        ),
+    )
+
+    home = bins.lookup(origin=Origin.T60, probability=Decimal("0.55"), strictly_before_utc=NOW,
+                       minimum_games=50, confidence=0.95)
+    away = bins.lookup(origin=Origin.T60, probability=Decimal("0.43"), strictly_before_utc=NOW,
+                       minimum_games=50, confidence=0.95)
+    ceiling = bins.lookup(origin=Origin.T60, probability=Decimal(1), strictly_before_utc=NOW,
+                          minimum_games=50, confidence=0.95)
+
+    assert home is not None and home.evidence_id == "home-bin"
+    assert away is not None and away.evidence_id == "away-bin"
+    assert ceiling is not None and ceiling.evidence_id == "ceiling-bin"
+
+
+# Catches: evidence files outside a trusted root or symlinks resolving outside it being accepted.
+def test_calibration_bins_reject_off_private_root_and_symlink_escape(tmp_path: Path) -> None:
+    private_root = tmp_path / "private"
+    private_root.mkdir()
+    outside = tmp_path / "outside.json"
+    escaped = private_root / "escaped.json"
+    escaped.symlink_to(outside)
+
+    with pytest.raises(ValueError, match="private root"):
+        DurableCalibrationBins(private_root, outside, ())
+    with pytest.raises(ValueError, match="private root"):
+        DurableCalibrationBins(private_root, escaped, ())
 
 
 # Catches: bypassing comparator selection, trusted event-source matching, or the audited
 # home-and-away candidate policy decisions.
 def test_market_layer_returns_comparator_and_both_audited_decisions(tmp_path: Path) -> None:
     quotes = (_quote("a", "2.05", "1.80"), _quote("b", "2.10", "1.75"))
-    evaluation = _layer(DurableCalibrationBins(tmp_path / "calibration.json", (_evidence(),))).evaluate(
+    private_root = tmp_path / "private"
+    private_root.mkdir()
+    evaluation = _layer(DurableCalibrationBins(
+        private_root, private_root / "calibration.json", (_bin("0", "1", "evidence-v1"),)
+    )).evaluate(
         _prediction(), quotes, NOW
     )
 
