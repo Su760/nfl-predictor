@@ -475,8 +475,10 @@ for the directly enforced off-root `artifact_root` branch.
 - Create: `src/nfl_predictor/runtime/services.py`
 - Modify: `src/nfl_predictor/runtime/__init__.py`
 - Modify: `src/nfl_predictor/cli.py`
+- Modify: `src/nfl_predictor/config.py` (approved acceptance repair)
 - Create: `tests/runtime/test_services.py`
 - Modify: `tests/test_cli.py`
+- Modify: `tests/test_config.py` (approved acceptance repair)
 - Modify: `tests/integration/test_fixture_pipeline.py`
 
 **Interfaces:**
@@ -484,7 +486,7 @@ for the directly enforced off-root `artifact_root` branch.
 - Consumes: Tasks 1–3, all Task 12 workflows/repositories, schedule-window functions, dispatch functions, policy loaders, and injected clocks/HTTP clients.
 - Produces: `ProductionRuntime`, `build_production_runtime(config_path, environment, clock, clients=None)`, a populated `ServiceRegistry`, and a `SchedulerFreshnessPolicy`.
 
-- [ ] **Step 1: Write failing composition and fail-closed tests**
+- [x] **Step 1: Write failing composition and fail-closed tests**
 
 ```python
 def test_build_production_runtime_populates_every_service(runtime_tree):
@@ -504,7 +506,7 @@ def test_readiness_fails_closed_on_missing_or_tampered_binding(runtime_tree, mis
     assert result["blockers"]
 ```
 
-- [ ] **Step 2: Write failing CLI auto-composition tests**
+- [x] **Step 2: Write failing CLI auto-composition tests**
 
 ```python
 def test_cli_builds_production_services_only_with_explicit_runtime_config(runtime_tree, capsys):
@@ -523,17 +525,17 @@ def test_cli_does_not_fall_back_to_preview_for_live_forecast(monkeypatch):
     assert error.value.code == 2
 ```
 
-- [ ] **Step 3: Replace fixture-pipeline fakes with runtime adapters**
+- [x] **Step 3: Replace fixture-pipeline fakes with runtime adapters**
 
 The integration test may keep deterministic source clients and a temporary frozen artifact, but must instantiate `DurableLineageRepository`, `RequiredFootballCapture`, `OptionalOddsCapture`, `FeatureBuilder`, `VerifiedArtifactRegistry`, `VerifiedForecastPredictor`, `ProductionMarketLayer`, `DurableForecastRepository`, `ArrowOutcomeAdapter`, `DurableOutcomeReportRepository`, and `ReportWorkflow` from production modules. Delete `FixtureLineageRepository`, `RequiredCapture`, `FixtureMarketCapture`, `Builder`, `Registry`, `Predictor`, and `FixtureMarketLayer` from the test.
 
-- [ ] **Step 4: Run service/CLI/integration tests and verify RED**
+- [x] **Step 4: Run service/CLI/integration tests and verify RED**
 
 Run: `uv run pytest tests/runtime/test_services.py tests/test_cli.py tests/integration/test_fixture_pipeline.py -q`
 
 Expected: failures because no production composition root exists.
 
-- [ ] **Step 5: Implement the composition root**
+- [x] **Step 5: Implement the composition root**
 
 ```python
 @dataclass(frozen=True)
@@ -580,7 +582,7 @@ def build_production_runtime(
 
 `RuntimeComponents.build` is defined in the same file as a frozen dataclass whose fields are the concrete `RequiredFootballCapture`, `OptionalOddsCapture`, `VerifiedForecastPredictor`, `ProductionMarketLayer`, `ForecastWorkflow`, `ArrowOutcomeAdapter`, `OutcomeWorkflow`, `ReportWorkflow`, and durable repositories. Its `service_registry()` binds its concrete methods directly to all ten `ServiceRegistry` fields. It cannot accept collaborator callbacks or `_unavailable_service`. `RuntimeClients` is an optional test injection for nflverse loaders, Odds API HTTP client, and repository-dispatch HTTP client; production defaults use the real adapters only after route-specific gates pass.
 
-- [ ] **Step 6: Implement every service over concrete workflow objects**
+- [x] **Step 6: Implement every service over concrete workflow objects**
 
 - `schedule_sync`: raw-captures nflverse schedules, reconciles candidate event versions, writes an immutable candidate active-event manifest, and returns its hashes without activating it.
 - `forecast_due`: loads the verified active schedule, computes due clusters, creates obligations, and calls `ForecastWorkflow.run` idempotently.
@@ -593,11 +595,11 @@ def build_production_runtime(
 - `schedule_render_dispatch`: returns deterministic public/private cron documents derived from verified active events.
 - `dispatch_due`: dry-run returns exact due envelopes; a live call requires `DispatchAuthorization`, validates caps again, and sends only `repository_dispatch_request(...)`.
 
-- [ ] **Step 7: Wire CLI auto-composition without weakening injection tests**
+- [x] **Step 7: Wire CLI auto-composition without weakening injection tests**
 
 When `services is None`, check only the passed `environment` mapping for `NFL_V2_RUNTIME_CONFIG`. If present, build the production runtime and use its scheduler policy. If absent, retain the current three offline previews and reject every mutating/live production route. Never read an implicit local config for a live route.
 
-- [ ] **Step 8: Run Task 4 tests and full Task 12 matrix**
+- [x] **Step 8: Run Task 4 tests and full Task 12 matrix**
 
 Run:
 
@@ -610,11 +612,13 @@ uv run mypy src/nfl_predictor/runtime src/nfl_predictor/cli.py
 
 Expected: PASS with zero network attempts and a concrete fixture source-to-scorecard chain.
 
-- [ ] **Step 9: Review checkpoint**
+- [x] **Step 9: Review checkpoint**
 
 Run: `git diff -- src/nfl_predictor/runtime/services.py src/nfl_predictor/runtime/__init__.py src/nfl_predictor/cli.py tests/runtime/test_services.py tests/test_cli.py tests/integration/test_fixture_pipeline.py`
 
 Expected: only the six Task 4 files; leave them unstaged.
+
+Acceptance evidence (2026-09-04): production runtime composition and all ten concrete services were implemented and independently approved after three review/fix rounds. The approved repair surface additionally included `src/nfl_predictor/config.py` and `tests/test_config.py` so explicit environment injection remains isolated from ambient process state. Outcome import is bound to a verified active-schedule snapshot, obligation-only runs remain reportable, dispatch derivation cannot mix schedule snapshots, and process-environment access is limited to the actual CLI entry boundary. Fresh controller verification: 46 Task 4/config/integration tests, 216 workflow tests, and 986 full offline tests passed; scoped Ruff and mypy were clean. The concrete integration recorded zero socket/DNS attempts and exactly one in-memory `httpx.MockTransport` odds request. Independent final verdict: 0 Critical, 0 Important, 2 previously deferred Minor test-breadth findings, 0 new Minor.
 
 ---
 
