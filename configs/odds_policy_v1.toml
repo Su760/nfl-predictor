@@ -1,0 +1,150 @@
+policy_version = "odds-v1"
+candidate_policy_version = "candidate-v1"
+provider_source_key = "the_odds_api"
+capture_enabled = false
+real_staking_enabled = false
+provider_plan_limit_observed = 500
+provider_rules_observed_on = "2026-08-28"
+monthly_hard_stop = 400
+maximum_books = 10
+markets = ["h2h"]
+odds_format = "decimal"
+t72_max_provider_age_seconds = 21600
+t60_max_provider_age_seconds = 900
+close_target_minutes = 5
+close_window_opens_minutes = 10
+close_window_closes_minutes = 1
+minimum_calibration_bin_games = 50
+calibration_buffer_one_sided_confidence = 0.95
+displayed_fixed_stake_units = 1
+kelly_fraction = 0.25
+book_allowlist = []
+book_settlement_contracts = []
+
+[[provider_team_names]]
+provider_name = "Arizona Cardinals"
+canonical_team = "ARI"
+
+[[provider_team_names]]
+provider_name = "Atlanta Falcons"
+canonical_team = "ATL"
+
+[[provider_team_names]]
+provider_name = "Baltimore Ravens"
+canonical_team = "BAL"
+
+[[provider_team_names]]
+provider_name = "Buffalo Bills"
+canonical_team = "BUF"
+
+[[provider_team_names]]
+provider_name = "Carolina Panthers"
+canonical_team = "CAR"
+
+[[provider_team_names]]
+provider_name = "Chicago Bears"
+canonical_team = "CHI"
+
+[[provider_team_names]]
+provider_name = "Cincinnati Bengals"
+canonical_team = "CIN"
+
+[[provider_team_names]]
+provider_name = "Cleveland Browns"
+canonical_team = "CLE"
+
+[[provider_team_names]]
+provider_name = "Dallas Cowboys"
+canonical_team = "DAL"
+
+[[provider_team_names]]
+provider_name = "Denver Broncos"
+canonical_team = "DEN"
+
+[[provider_team_names]]
+provider_name = "Detroit Lions"
+canonical_team = "DET"
+
+[[provider_team_names]]
+provider_name = "Green Bay Packers"
+canonical_team = "GB"
+
+[[provider_team_names]]
+provider_name = "Houston Texans"
+canonical_team = "HOU"
+
+[[provider_team_names]]
+provider_name = "Indianapolis Colts"
+canonical_team = "IND"
+
+[[provider_team_names]]
+provider_name = "Jacksonville Jaguars"
+canonical_team = "JAX"
+
+[[provider_team_names]]
+provider_name = "Kansas City Chiefs"
+canonical_team = "KC"
+
+[[provider_team_names]]
+provider_name = "Las Vegas Raiders"
+canonical_team = "LV"
+
+[[provider_team_names]]
+provider_name = "Los Angeles Chargers"
+canonical_team = "LAC"
+
+[[provider_team_names]]
+provider_name = "Los Angeles Rams"
+canonical_team = "LAR"
+
+[[provider_team_names]]
+provider_name = "Miami Dolphins"
+canonical_team = "MIA"
+
+[[provider_team_names]]
+provider_name = "Minnesota Vikings"
+canonical_team = "MIN"
+
+[[provider_team_names]]
+provider_name = "New England Patriots"
+canonical_team = "NE"
+
+[[provider_team_names]]
+provider_name = "New Orleans Saints"
+canonical_team = "NO"
+
+[[provider_team_names]]
+provider_name = "New York Giants"
+canonical_team = "NYG"
+
+[[provider_team_names]]
+provider_name = "New York Jets"
+canonical_team = "NYJ"
+
+[[provider_team_names]]
+provider_name = "Philadelphia Eagles"
+canonical_team = "PHI"
+
+[[provider_team_names]]
+provider_name = "Pittsburgh Steelers"
+canonical_team = "PIT"
+
+[[provider_team_names]]
+provider_name = "San Francisco 49ers"
+canonical_team = "SF"
+
+[[provider_team_names]]
+provider_name = "Seattle Seahawks"
+canonical_team = "SEA"
+
+[[provider_team_names]]
+provider_name = "Tampa Bay Buccaneers"
+canonical_team = "TB"
+
+[[provider_team_names]]
+provider_name = "Tennessee Titans"
+canonical_team = "TEN"
+
+[[provider_team_names]]
+provider_name = "Washington Commanders"
+canonical_team = "WAS"

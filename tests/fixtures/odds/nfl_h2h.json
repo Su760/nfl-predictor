@@ -1,0 +1,27 @@
+[
+  {
+    "id": "offline-fixture-game-1",
+    "sport_key": "americanfootball_nfl",
+    "sport_title": "NFL",
+    "commence_time": "2026-09-11T00:20:00Z",
+    "home_team": "Philadelphia Eagles",
+    "away_team": "Dallas Cowboys",
+    "bookmakers": [
+      {
+        "key": "book-a",
+        "title": "Offline Book A",
+        "last_update": "2026-08-28T12:00:00Z",
+        "markets": [
+          {
+            "key": "h2h",
+            "last_update": "2026-08-28T12:00:00Z",
+            "outcomes": [
+              {"name": "Philadelphia Eagles", "price": 1.8},
+              {"name": "Dallas Cowboys", "price": 2.1}
+            ]
+          }
+        ]
+      }
+    ]
+  }
+]

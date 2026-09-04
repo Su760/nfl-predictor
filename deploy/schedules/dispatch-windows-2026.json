@@ -1,0 +1,66 @@
+{
+  "schema_version": "nfl-v2-dispatch-windows-v1",
+  "season": 2026,
+  "deployment_enabled": false,
+  "generated_from_active_event_versions": false,
+  "official_schedule_review": {
+    "source_kind": "official_schedule",
+    "source_description": "Operator-reviewed official confirmation that NE plays at SEA on 2026-09-09 at 17:20 PDT",
+    "reviewed_on": "2026-09-01",
+    "review_scope": "One kickoff reference only; this is not an active 2026 event-version schedule"
+  },
+  "reviewed_kickoff_facts": [
+    {
+      "away_team": "NE",
+      "home_team": "SEA",
+      "kickoff_at_utc": "2026-09-10T00:20:00Z",
+      "status": "reviewed_reference_only_not_active_event_version"
+    }
+  ],
+  "origin_targets": [
+    {
+      "origin": "T72",
+      "target_at_utc": "2026-09-07T00:20:00Z"
+    },
+    {
+      "origin": "T60",
+      "target_at_utc": "2026-09-09T23:20:00Z"
+    }
+  ],
+  "public_offsets_minutes": [-8, -3, 2, 7],
+  "private_offsets_minutes": [-6, -1, 4, 9],
+  "public_crons": [
+    "12 0 7 9 *",
+    "17 0 7 9 *",
+    "22 0 7 9 *",
+    "27 0 7 9 *",
+    "12 23 9 9 *",
+    "17 23 9 9 *",
+    "22 23 9 9 *",
+    "27 23 9 9 *"
+  ],
+  "private_crons": [
+    "14 0 7 9 *",
+    "19 0 7 9 *",
+    "24 0 7 9 *",
+    "29 0 7 9 *",
+    "14 23 9 9 *",
+    "19 23 9 9 *",
+    "24 23 9 9 *",
+    "29 23 9 9 *"
+  ],
+  "active_event_version_manifest_sha256": null,
+  "limitations": [
+    "No reviewed active event version exists in this worktree; due planning must fail closed",
+    "Future NFL flex scheduling can move kickoff times and requires regeneration and review",
+    "TBD kickoff times are excluded until the official schedule resolves them",
+    "GitHub cron has no year field, so month and season locks remain mandatory"
+  ],
+  "enablement_blockers": [
+    "Install and hash the complete active 2026 event-version schedule",
+    "Review every flex and TBD status against an official schedule source",
+    "Approve an exact public code SHA and private target repository",
+    "Verify remaining included private Actions minutes and storage",
+    "Regenerate both workflow cron lists and this manifest"
+  ]
+}

@@ -1,0 +1,341 @@
+name: Capture and forecast immutable NFL origin
+
+on:
+  repository_dispatch:
+    types:
+      - nfl_forecast_due
+  workflow_dispatch:
+    inputs:
+      event_id:
+        description: Canonical event ID for in-window recovery
+        required: true
+        type: string
+      origin:
+        description: Forecast origin
+        required: true
+        type: choice
+        options:
+          - T72
+          - T60
+      code_sha:
+        description: Reviewed 40-character public code SHA
+        required: true
+        type: string
+      schedule_manifest_sha:
+        description: Reviewed schedule manifest SHA-256
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nfl-odds-budget-2026-09
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    if: ${{ vars.NFL_V2_DEPLOYMENT_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NFL_PREDICTOR_DATA_DIR: data
+      TRIGGER_KIND: ${{ github.event_name }}
+      RECOVERY_EVENT_ID: ${{ inputs.event_id }}
+      RECOVERY_ORIGIN: ${{ inputs.origin }}
+    steps:
+      - name: Check out private ledger
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: data
+      - name: Freeze UTC scheduler clock
+        shell: bash
+        run: |
+          run_at_utc="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+          printf 'RUN_AT_UTC=%s\n' "$run_at_utc" >> "$GITHUB_ENV"
+      - name: Validate fixed dispatch envelope
+        id: validate
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          OUTER_EVENT_TYPE: ${{ github.event.action }}
+          PAYLOAD_JSON: ${{ toJson(github.event.client_payload) }}
+          MANUAL_EVENT_ID: ${{ inputs.event_id }}
+          MANUAL_ORIGIN: ${{ inputs.origin }}
+          MANUAL_CODE_SHA: ${{ inputs.code_sha }}
+          MANUAL_SCHEDULE_SHA: ${{ inputs.schedule_manifest_sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          CURRENT_PRIVATE_REPOSITORY: ${{ github.repository }}
+          CONFIGURED_PUBLIC_REPOSITORY: ${{ vars.NFL_PUBLIC_REPOSITORY }}
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          import tomllib
+          from pathlib import Path
+
+          root = Path("data")
+          config = tomllib.loads((root / "config/data_repo.toml").read_text())
+          manifest_path = root / config["schedule"]["manifest_path"]
+          manifest_raw = manifest_path.read_bytes()
+          manifest_sha = hashlib.sha256(manifest_raw).hexdigest()
+          manifest = json.loads(manifest_raw)
+          if manifest_sha != config["schedule"]["manifest_sha256"]:
+              raise SystemExit("schedule manifest hash mismatch")
+          if not config["deployment_enabled"] or not manifest["deployment_enabled"]:
+              raise SystemExit("deployment is disabled")
+          if config["authorization"]["target_private_repository"] != os.environ["CURRENT_PRIVATE_REPOSITORY"]:
+              raise SystemExit("private repository is not the authorized target")
+          if config["authorization"]["source_public_repository"] != os.environ["CONFIGURED_PUBLIC_REPOSITORY"]:
+              raise SystemExit("configured public repository is not authorized")
+          if (
+              not config["schedule"]["generated_from_active_event_versions"]
+              or not manifest["generated_from_active_event_versions"]
+          ):
+              raise SystemExit("active event-version schedule is absent")
+          if not config["schedule"]["active_event_version_manifest_sha256"]:
+              raise SystemExit("active event-version manifest hash is absent")
+          if (
+              manifest["active_event_version_manifest_sha256"]
+              != config["schedule"]["active_event_version_manifest_sha256"]
+          ):
+              raise SystemExit("active event-version manifest hash mismatch")
+          if os.environ["RUN_AT_UTC"][:7] != config["month_lock"]:
+              raise SystemExit("workflow month is outside the reviewed month lock")
+
+          sha_pattern = re.compile(r"^[0-9a-f]{40}$")
+          manifest_pattern = re.compile(r"^[0-9a-f]{64}$")
+          nonce_pattern = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,95}$")
+          cluster_pattern = re.compile(
+              r"^(?:T72|T60):\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|\+00:00)$"
+          )
+          expected_payload_fields = {
+              "event_type",
+              "source_repository",
+              "source_ref",
+              "cluster_id",
+              "code_sha",
+              "nonce",
+              "schedule_manifest_sha",
+          }
+          if os.environ["EVENT_NAME"] == "repository_dispatch":
+              payload = json.loads(os.environ["PAYLOAD_JSON"])
+              if set(payload) != expected_payload_fields:
+                  raise SystemExit("dispatch payload schema mismatch")
+              if any(not isinstance(payload[field], str) for field in expected_payload_fields):
+                  raise SystemExit("dispatch payload fields must all be strings")
+              if os.environ["OUTER_EVENT_TYPE"] != config["authorization"]["dispatch_event_type"]:
+                  raise SystemExit("outer dispatch event type mismatch")
+              if payload["event_type"] != config["authorization"]["dispatch_event_type"]:
+                  raise SystemExit("payload dispatch event type mismatch")
+              if payload["source_repository"] != config["authorization"]["source_public_repository"]:
+                  raise SystemExit("dispatch source repository mismatch")
+              expected_ref = "refs/heads/" + config["authorization"]["source_default_branch"]
+              if payload["source_ref"] != expected_ref:
+                  raise SystemExit("dispatch source ref mismatch")
+              code_sha = payload["code_sha"]
+              schedule_sha = payload["schedule_manifest_sha"]
+              nonce = payload["nonce"]
+              if not cluster_pattern.fullmatch(payload["cluster_id"]):
+                  raise SystemExit("dispatch cluster ID is malformed")
+              normalized_cluster = payload["cluster_id"].replace("+00:00", "Z")
+              allowed_clusters = {
+                  target["origin"] + ":" + target["target_at_utc"]
+                  for target in manifest["origin_targets"]
+              }
+              if normalized_cluster not in allowed_clusters:
+                  raise SystemExit("dispatch cluster ID is not in the approved schedule")
+          elif os.environ["EVENT_NAME"] == "workflow_dispatch":
+              if os.environ["MANUAL_ORIGIN"] not in {"T72", "T60"}:
+                  raise SystemExit("manual recovery origin is invalid")
+              if not os.environ["MANUAL_EVENT_ID"]:
+                  raise SystemExit("manual recovery event ID is required")
+              code_sha = os.environ["MANUAL_CODE_SHA"]
+              schedule_sha = os.environ["MANUAL_SCHEDULE_SHA"]
+              nonce = "manual-" + os.environ["RUN_ID"] + "-" + os.environ["RUN_ATTEMPT"]
+          else:
+              raise SystemExit("workflow trigger is not allowed")
+
+          approved_sha = config["authorization"]["approved_public_code_sha"]
+          if not sha_pattern.fullmatch(code_sha) or code_sha != approved_sha:
+              raise SystemExit("public code SHA is not the exact approved SHA")
+          if not manifest_pattern.fullmatch(schedule_sha) or schedule_sha != manifest_sha:
+              raise SystemExit("schedule manifest SHA is not approved")
+          if not nonce_pattern.fullmatch(nonce):
+              raise SystemExit("dispatch nonce is malformed")
+          nonce_root = root / config["ledger"]["nonce_directory"]
+          nonce_root.mkdir(parents=True, exist_ok=True)
+          nonce_digest = hashlib.sha256(nonce.encode()).hexdigest()
+          nonce_path = nonce_root / (nonce_digest + ".nonce")
+          try:
+              descriptor = os.open(nonce_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+          except FileExistsError as error:
+              raise SystemExit("dispatch nonce replay rejected") from error
+          with os.fdopen(descriptor, "w", encoding="ascii") as handle:
+              handle.write(nonce_digest + "\n")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write("code_sha=" + code_sha + "\n")
+          PY
+      - name: Check out validated public SHA
+        if: github.event_name == 'repository_dispatch'
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ vars.NFL_PUBLIC_REPOSITORY }}
+          ref: ${{ github.event.client_payload.code_sha }}
+          path: code
+          persist-credentials: false
+      - name: Check out manual validated public SHA
+        if: github.event_name == 'workflow_dispatch'
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ vars.NFL_PUBLIC_REPOSITORY }}
+          ref: ${{ inputs.code_sha }}
+          path: code
+          persist-credentials: false
+      - name: Install locked Python 3.11
+        # astral-sh/setup-uv v8.1.0
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+        with:
+          python-version: "3.11"
+          enable-cache: false
+      - name: Restore frozen public environment
+        working-directory: code
+        shell: bash
+        run: uv sync --frozen
+      - name: Run readiness gate
+        working-directory: code
+        shell: bash
+        run: uv run python -m nfl_predictor.cli readiness check --as-of "$RUN_AT_UTC"
+      - name: Reserve monthly odds budget
+        working-directory: code
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import tomllib
+          from pathlib import Path
+
+          config = tomllib.loads(Path("../data/config/data_repo.toml").read_text())
+          projection = config["cost_projection"]
+          job_fields = (
+              ("private_due_ticks", "private_due_seconds_each"),
+              ("full_forecast_workers", "full_forecast_seconds_each"),
+              ("settlement_jobs", "settlement_seconds_each"),
+              ("correction_jobs", "correction_seconds_each"),
+              ("retry_allowance", "retry_seconds_each"),
+          )
+          billed_minutes = sum(
+              projection[count] * ((projection[seconds] + 59) // 60)
+              for count, seconds in job_fields
+          )
+          paid_actions = max(
+              0,
+              billed_minutes - projection["verified_included_private_actions_minutes"],
+          )
+          paid_storage = max(
+              0,
+              projection["projected_storage_bytes"]
+              - projection["verified_included_storage_bytes"],
+          )
+          if billed_minutes != projection["projected_github_billed_minutes"]:
+              raise SystemExit("stored Actions projection does not match per-job rounding")
+          if paid_actions != projection["projected_paid_actions_minutes"]:
+              raise SystemExit("stored paid Actions projection is inconsistent")
+          if paid_storage != projection["projected_paid_storage_bytes"]:
+              raise SystemExit("stored paid storage projection is inconsistent")
+          if paid_actions != 0:
+              raise SystemExit("projected paid Actions usage is nonzero")
+          if paid_storage != 0:
+              raise SystemExit("projected paid storage is nonzero")
+          reservation_root = Path("../data") / config["ledger"]["budget_reservation_directory"]
+          reservation_root.mkdir(parents=True, exist_ok=True)
+          destination = reservation_root / (os.environ["GITHUB_RUN_ID"] + ".json")
+          descriptor = os.open(destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+          with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+              json.dump(
+                  {"month": config["month_lock"], "run_id": os.environ["GITHUB_RUN_ID"]},
+                  handle,
+                  sort_keys=True,
+              )
+              handle.write("\n")
+          PY
+          uv run python -m nfl_predictor.cli odds budget-plan --season 2026
+      - name: Capture immutable forecast
+        working-directory: code
+        shell: bash
+        env:
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+        run: |
+          echo "::add-mask::${ODDS_API_KEY}"
+          if [ "$TRIGGER_KIND" = "workflow_dispatch" ]; then
+            uv run python -m nfl_predictor.cli forecast run \
+              --event "$RECOVERY_EVENT_ID" --origin "$RECOVERY_ORIGIN" \
+              --at "$RUN_AT_UTC" --trigger manual
+          else
+            uv run python -m nfl_predictor.cli forecast due \
+              --at "$RUN_AT_UTC" --trigger public_dispatch
+          fi
+      - name: Scan ledger for secret leakage
+        shell: bash
+        run: |
+          python - <<'PY'
+          import re
+          from pathlib import Path
+
+          patterns = (
+              re.compile(rb"ODDS_API_KEY\s*[:=]"),
+              re.compile(rb"(?:github_pat_|ghp_)[A-Za-z0-9_]{20,}"),
+              re.compile(rb"api[_-]?key\s*[:=]\s*[A-Za-z0-9_-]{16,}", re.IGNORECASE),
+          )
+          for root_name in ("ledger", "raw", "reports"):
+              root = Path("data") / root_name
+              if not root.exists():
+                  continue
+              for path in root.rglob("*"):
+                  if path.is_file():
+                      content = path.read_bytes()
+                      if any(pattern.search(content) for pattern in patterns):
+                          raise SystemExit("possible secret material in " + str(path))
+          PY
+      - name: Validate immutable ledger
+        shell: bash
+        run: |
+          git -C data diff --check
+          if git -C data diff --name-only --diff-filter=DM | grep -q .; then
+            echo "existing immutable file changed or deleted" >&2
+            exit 1
+          fi
+          python - <<'PY'
+          import subprocess
+
+          allowed = ("ledger/", "raw/", "reports/")
+          output = subprocess.check_output(
+              ["git", "-C", "data", "status", "--porcelain"], text=True
+          )
+          for line in output.splitlines():
+              path = line[3:]
+              if not path.startswith(allowed):
+                  raise SystemExit("write outside immutable append roots: " + path)
+          PY
+      - name: Push immutable ledger append
+        shell: bash
+        run: |
+          for append_root in ledger raw reports; do
+            if [ -e "data/${append_root}" ]; then
+              git -C data add -- "$append_root"
+            fi
+          done
+          if git -C data diff --cached --quiet; then
+            exit 0
+          fi
+          git -C data config user.name "nfl-v2-automation"
+          git -C data config user.email "nfl-v2-automation@users.noreply.github.com"
+          git -C data commit -m "data: append immutable NFL forecast"
+          git -C data push origin HEAD

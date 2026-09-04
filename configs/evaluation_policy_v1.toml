@@ -1,0 +1,14 @@
+policy_version = "evaluation-v1"
+bootstrap_replicates = 10000
+bootstrap_seed = 20260828
+moving_block_weeks = 3
+calibration_regression_max_iter = 2000
+log_loss_epsilon = 1e-15
+minimum_promotion_seasons = 2
+minimum_systematic_staking_seasons = 2
+minimum_common_games = 500
+maximum_brier_degradation = 0.005
+minimum_calibration_intercept = -0.10
+maximum_calibration_intercept = 0.10
+minimum_calibration_slope = 0.80
+maximum_calibration_slope = 1.20

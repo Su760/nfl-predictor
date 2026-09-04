@@ -1,0 +1,6 @@
+policy_version = "forecast-v1"
+season_type = "REG"
+origins = ["T72", "T60"]
+window_minutes = 10
+numerical_probability_epsilon = 1e-15
+tie_prior = "jeffreys_global_regular_season"

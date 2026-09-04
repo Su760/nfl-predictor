@@ -1,0 +1,55 @@
+deployment_enabled = false
+zero_dollar_mode = true
+schema_version = "nfl-v2-private-data-v1"
+season = 2026
+month_lock = "2026-09"
+
+[authorization]
+source_public_repository = "Su760/nfl-predictor"
+source_default_branch = "main"
+target_private_repository = ""
+approved_public_code_sha = ""
+dispatch_event_type = "nfl_forecast_due"
+
+[schedule]
+manifest_path = "config/dispatch-windows-2026.json"
+manifest_sha256 = "4f44499226db9a9ac65e06fdc1aa8c2a2182c6312597ffcf0c163988a5b7e3ff"
+active_event_version_manifest_sha256 = ""
+generated_from_active_event_versions = false
+public_offsets_minutes = [-8, -3, 2, 7]
+private_offsets_minutes = [-6, -1, 4, 9]
+
+[cost_projection]
+projection_status = "BLOCKED_UNVERIFIED_ALLOWANCE"
+runner_class = "ubuntu-latest"
+github_rounding = "ceil_each_job_to_whole_minute"
+private_due_ticks = 8
+private_due_seconds_each = 15
+full_forecast_workers = 2
+full_forecast_seconds_each = 121
+settlement_jobs = 1
+settlement_seconds_each = 61
+correction_jobs = 1
+correction_seconds_each = 1
+retry_allowance = 2
+retry_seconds_each = 121
+projected_github_billed_minutes = 23
+projected_odds_requests = 6
+projected_storage_bytes = 104857600
+verified_included_private_actions_minutes = 0
+verified_included_storage_bytes = 0
+projected_paid_actions_minutes = 23
+projected_paid_storage_bytes = 104857600
+verified_allowance_at_utc = ""
+
+[ledger]
+nonce_directory = "ledger/dispatch-nonces"
+budget_reservation_directory = "ledger/budget-reservations"
+allowed_append_roots = ["ledger", "reports", "raw"]
+
+[safety]
+football_only = true
+automatic_wagering = false
+allow_paid_usage = false
+allow_unreviewed_schedule = false
+allow_moving_public_ref = false

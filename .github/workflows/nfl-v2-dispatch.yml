@@ -1,0 +1,124 @@
+name: NFL V2 schedule-specific due dispatcher
+
+on:
+  schedule:
+    - cron: "12 0 7 9 *"
+    - cron: "17 0 7 9 *"
+    - cron: "22 0 7 9 *"
+    - cron: "27 0 7 9 *"
+    - cron: "12 23 9 9 *"
+    - cron: "17 23 9 9 *"
+    - cron: "22 23 9 9 *"
+    - cron: "27 23 9 9 *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  due-dispatch:
+    if: ${{ vars.NFL_V2_DEPLOYMENT_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      EXPECTED_MANIFEST_SHA: 4f44499226db9a9ac65e06fdc1aa8c2a2182c6312597ffcf0c163988a5b7e3ff
+    steps:
+      - name: Freeze UTC scheduler clock
+        shell: bash
+        run: |
+          run_at_utc="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+          printf 'RUN_AT_UTC=%s\n' "$run_at_utc" >> "$GITHUB_ENV"
+      - name: Check out exact public revision
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install locked Python toolchain
+        # astral-sh/setup-uv v8.1.0
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+        with:
+          python-version: "3.11"
+          enable-cache: false
+      - name: Fail closed on incomplete schedule
+        shell: bash
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path("deploy/schedules/dispatch-windows-2026.json")
+          raw = path.read_bytes()
+          manifest = json.loads(raw)
+          if hashlib.sha256(raw).hexdigest() != os.environ["EXPECTED_MANIFEST_SHA"]:
+              raise SystemExit("schedule manifest hash mismatch")
+          if not manifest.get("deployment_enabled"):
+              raise SystemExit("schedule manifest deployment is disabled")
+          if not manifest.get("generated_from_active_event_versions"):
+              raise SystemExit("active event-version schedule is absent")
+          if not manifest.get("active_event_version_manifest_sha256"):
+              raise SystemExit("active event-version manifest hash is absent")
+          PY
+      - name: Restore frozen dependencies
+        shell: bash
+        run: uv sync --frozen
+      - name: Render due fixed envelope without network
+        shell: bash
+        env:
+          NFL_PUBLIC_REPOSITORY: ${{ github.repository }}
+          NFL_PUBLIC_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          NFL_PUBLIC_CODE_SHA: ${{ github.sha }}
+        run: |
+          uv run python -m nfl_predictor.cli dispatch due \
+            --at "$RUN_AT_UTC" --dry-run > due-dispatch.json
+      - name: Validate fixed envelope before dispatch
+        id: envelope
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          result = json.loads(Path("due-dispatch.json").read_text())
+          output = Path(os.environ["GITHUB_OUTPUT"])
+          if result.get("due") is False:
+              with output.open("a", encoding="utf-8") as handle:
+                  handle.write("due=false\n")
+              raise SystemExit(0)
+          request = result.get("repository_dispatch")
+          expected_request = {"event_type", "client_payload"}
+          expected_payload = {
+              "event_type",
+              "source_repository",
+              "source_ref",
+              "cluster_id",
+              "code_sha",
+              "nonce",
+              "schedule_manifest_sha",
+          }
+          if not isinstance(request, dict) or set(request) != expected_request:
+              raise SystemExit("repository-dispatch request schema mismatch")
+          payload = request.get("client_payload")
+          if not isinstance(payload, dict) or set(payload) != expected_payload:
+              raise SystemExit("client payload schema mismatch")
+          if request.get("event_type") != "nfl_forecast_due":
+              raise SystemExit("repository-dispatch event type mismatch")
+          Path("repository-dispatch.json").write_text(
+              json.dumps(request, sort_keys=True, separators=(",", ":")) + "\n",
+              encoding="utf-8",
+          )
+          with output.open("a", encoding="utf-8") as handle:
+              handle.write("due=true\n")
+          PY
+      - name: Send fixed repository dispatch
+        if: steps.envelope.outputs.due == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.NFL_DATA_REPO_DISPATCH_TOKEN }}
+          TARGET_REPOSITORY: ${{ vars.NFL_DATA_REPO }}
+        run: |
+          gh api --method POST \
+            "repos/${TARGET_REPOSITORY}/dispatches" \
+            --input repository-dispatch.json

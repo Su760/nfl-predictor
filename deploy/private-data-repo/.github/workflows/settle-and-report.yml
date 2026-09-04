@@ -1,0 +1,185 @@
+name: Settle NFL outcomes and publish correction-aware reports
+
+on:
+  schedule:
+    - cron: "45 5 10 9 *"
+    - cron: "30 12 16 9 *"
+  workflow_dispatch:
+    inputs:
+      lane:
+        description: Explicit recovery lane
+        required: true
+        type: choice
+        options:
+          - postgame
+          - official_correction
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nfl-settlement-2026-09
+  cancel-in-progress: false
+
+jobs:
+  settle:
+    if: ${{ vars.NFL_V2_DEPLOYMENT_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NFL_PREDICTOR_DATA_DIR: data
+    steps:
+      - name: Check out private ledger
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: data
+      - name: Freeze UTC scheduler clock
+        shell: bash
+        run: |
+          run_at_utc="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+          printf 'RUN_AT_UTC=%s\n' "$run_at_utc" >> "$GITHUB_ENV"
+      - name: Validate settlement configuration
+        id: config
+        shell: bash
+        env:
+          CURRENT_REPOSITORY: ${{ github.repository }}
+          CONFIGURED_PUBLIC_REPOSITORY: ${{ vars.NFL_PUBLIC_REPOSITORY }}
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          import tomllib
+          from pathlib import Path
+
+          root = Path("data")
+          config = tomllib.loads((root / "config/data_repo.toml").read_text())
+          manifest_path = root / config["schedule"]["manifest_path"]
+          raw = manifest_path.read_bytes()
+          manifest = json.loads(raw)
+          if not config["deployment_enabled"] or not manifest["deployment_enabled"]:
+              raise SystemExit("deployment is disabled")
+          if config["authorization"]["target_private_repository"] != os.environ["CURRENT_REPOSITORY"]:
+              raise SystemExit("private repository is not the authorized target")
+          if config["authorization"]["source_public_repository"] != os.environ["CONFIGURED_PUBLIC_REPOSITORY"]:
+              raise SystemExit("configured public repository is not authorized")
+          if hashlib.sha256(raw).hexdigest() != config["schedule"]["manifest_sha256"]:
+              raise SystemExit("schedule manifest hash mismatch")
+          if (
+              not config["schedule"]["generated_from_active_event_versions"]
+              or not manifest["generated_from_active_event_versions"]
+          ):
+              raise SystemExit("active event-version schedule is absent")
+          if (
+              not config["schedule"]["active_event_version_manifest_sha256"]
+              or manifest["active_event_version_manifest_sha256"]
+              != config["schedule"]["active_event_version_manifest_sha256"]
+          ):
+              raise SystemExit("active event-version manifest hash mismatch")
+          if os.environ["RUN_AT_UTC"][:7] != config["month_lock"]:
+              raise SystemExit("workflow month is outside the reviewed month lock")
+          code_sha = config["authorization"]["approved_public_code_sha"]
+          if not re.fullmatch(r"[0-9a-f]{40}", code_sha):
+              raise SystemExit("approved public code SHA is absent or malformed")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write("code_sha=" + code_sha + "\n")
+          PY
+      - name: Check out exact approved public SHA
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ vars.NFL_PUBLIC_REPOSITORY }}
+          ref: ${{ steps.config.outputs.code_sha }}
+          path: code
+          persist-credentials: false
+      - name: Install locked Python 3.11
+        # astral-sh/setup-uv v8.1.0
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+        with:
+          python-version: "3.11"
+          enable-cache: false
+      - name: Restore frozen public environment
+        working-directory: code
+        shell: bash
+        run: uv sync --frozen
+      - name: Select postgame or official correction lane
+        id: lane
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
+          REQUESTED_LANE: ${{ inputs.lane }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          if os.environ["EVENT_NAME"] == "workflow_dispatch":
+              lane = os.environ["REQUESTED_LANE"]
+          elif os.environ["EVENT_SCHEDULE"] == "45 5 10 9 *":
+              lane = "postgame"
+          elif os.environ["EVENT_SCHEDULE"] == "30 12 16 9 *":
+              lane = "official_correction"
+          else:
+              raise SystemExit("unreviewed settlement trigger")
+          if lane not in {"postgame", "official_correction"}:
+              raise SystemExit("settlement lane is not allowed")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write("lane=" + lane + "\n")
+          PY
+      - name: Capture outcomes and append settlements
+        working-directory: code
+        shell: bash
+        env:
+          SETTLEMENT_LANE: ${{ steps.lane.outputs.lane }}
+        run: |
+          echo "Running ${SETTLEMENT_LANE} settlement lane"
+          uv run python -m nfl_predictor.cli outcomes sync --season 2026 --through-week 1
+          uv run python -m nfl_predictor.cli settle --season 2026 --through-week 1
+          uv run python -m nfl_predictor.cli report weekly --season 2026 --through-week 1
+      - name: Validate immutable settlement append
+        shell: bash
+        run: |
+          git -C data diff --check
+          if git -C data diff --name-only --diff-filter=DM | grep -q .; then
+            echo "existing immutable file changed or deleted" >&2
+            exit 1
+          fi
+          python - <<'PY'
+          import re
+          import subprocess
+          from pathlib import Path
+
+          allowed = ("ledger/", "raw/", "reports/")
+          output = subprocess.check_output(
+              ["git", "-C", "data", "status", "--porcelain"], text=True
+          )
+          for line in output.splitlines():
+              path = line[3:]
+              if not path.startswith(allowed):
+                  raise SystemExit("write outside immutable append roots: " + path)
+          secret_pattern = re.compile(rb"(?:github_pat_|ghp_)[A-Za-z0-9_]{20,}")
+          for root_name in allowed:
+              root = Path("data") / root_name.rstrip("/")
+              if root.exists():
+                  for path in root.rglob("*"):
+                      if path.is_file() and secret_pattern.search(path.read_bytes()):
+                          raise SystemExit("possible secret material in " + str(path))
+          PY
+      - name: Push settlement and report append
+        shell: bash
+        run: |
+          for append_root in ledger raw reports; do
+            if [ -e "data/${append_root}" ]; then
+              git -C data add -- "$append_root"
+            fi
+          done
+          if git -C data diff --cached --quiet; then
+            exit 0
+          fi
+          git -C data config user.name "nfl-v2-automation"
+          git -C data config user.email "nfl-v2-automation@users.noreply.github.com"
+          git -C data commit -m "data: append NFL settlement and report"
+          git -C data push origin HEAD

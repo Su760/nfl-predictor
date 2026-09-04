@@ -1,0 +1,17 @@
+policy_version = "feature-v1"
+schema_version = "feature-schema-v1"
+ewma_halflife_games = 4.0
+prior_effective_games = 4.0
+offseason_regression_to_mean = 0.3333333333333333
+epa_ridge_alpha = 10.0
+minimum_qb_attempts = 50
+short_week_max_rest_days = 6
+offseason_rest_cap_days = 14
+elo_initial = 1500.0
+elo_home_field_points = 0.0
+elo_k_factor = 20.0
+elo_offseason_retention = 1.0
+elo_logistic_scale = 400.0
+elo_mov_denominator = 2.2
+elo_mov_rating_scale = 0.001
+massey_home_field_points = 0.0
