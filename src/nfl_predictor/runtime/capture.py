@@ -41,23 +41,23 @@ from nfl_predictor.sources.outcomes import (
 from nfl_predictor.storage.ledger import canonical_json_bytes
 from nfl_predictor.workflows.forecast import CaptureBundle, MarketCaptureDisabled
 
-_SCHEDULE_COLUMNS = frozenset(
-    {
-        "game_id",
-        "season",
-        "game_type",
-        "week",
-        "gameday",
-        "gametime",
-        "away_team",
-        "home_team",
-        "away_score",
-        "home_score",
-        "location",
-        "div_game",
-        "stadium_id",
-    }
+_SCHEDULE_SCHEMA = (
+    ("game_id", pl.String()),
+    ("season", pl.Int64()),
+    ("game_type", pl.String()),
+    ("week", pl.Int64()),
+    ("gameday", pl.String()),
+    ("gametime", pl.String()),
+    ("away_team", pl.String()),
+    ("home_team", pl.String()),
+    ("away_score", pl.Int64()),
+    ("home_score", pl.Int64()),
+    ("location", pl.String()),
+    ("div_game", pl.Boolean()),
+    ("stadium_id", pl.String()),
 )
+_SCHEDULE_FIELDS = tuple(name for name, _ in _SCHEDULE_SCHEMA)
+_SCHEDULE_COLUMNS = frozenset(_SCHEDULE_FIELDS)
 _PBP_COLUMNS = frozenset(
     {
         "game_id",
@@ -875,8 +875,10 @@ class ArrowOutcomeAdapter(OutcomeAdapter):
             frame = pl.read_ipc(BytesIO(payload))
         except Exception as error:
             raise ValueError("outcome schedules IPC payload is unreadable") from error
-        if set(frame.columns) != _SCHEDULE_COLUMNS:
+        if tuple(frame.columns) != _SCHEDULE_FIELDS:
             raise ValueError("outcome schedules must use exact frozen schedule fields")
+        if tuple(frame.schema.items()) != _SCHEDULE_SCHEMA:
+            raise ValueError("outcome schedules must use exact frozen schedule schema")
         rows = cast(
             list[dict[str, object]], frame.select(sorted(_SCHEDULE_COLUMNS)).to_dicts()
         )

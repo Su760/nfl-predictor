@@ -1225,6 +1225,23 @@ def test_arrow_outcome_adapter_requires_exact_frozen_schedule_fields(
         adapter.capture({"source_event_id": "2025_01_GB_CHI"}, "outcome-run-1")
 
 
+def test_arrow_outcome_adapter_rejects_wrong_frozen_schedule_dtype(tmp_path: Path) -> None:
+    data_root = tmp_path / "private-data"
+    data_root.mkdir()
+    schedules = _schedules().with_columns(pl.col("season").cast(pl.String))
+
+    class Source:
+        source = "nflverse"
+
+        def fetch(self, request: dict[str, Any]) -> RawResponse:
+            return RawResponse("nflverse", "request", NOW, NOW, 200, _ipc(schedules), {})
+
+    adapter = ArrowOutcomeAdapter(CaptureService(data_root, lambda *_: None, BUILD), Source())
+
+    with pytest.raises(ValueError, match="exact frozen schedule schema"):
+        adapter.capture({"source_event_id": "2025_01_GB_CHI"}, "outcome-run-1")
+
+
 def test_arrow_outcome_adapter_maps_absent_scores_to_unresolved_without_guessing(
     tmp_path: Path,
 ) -> None:
