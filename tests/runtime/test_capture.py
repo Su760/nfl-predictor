@@ -10,11 +10,16 @@ from typing import Any
 import polars as pl
 import pytest
 
-from nfl_predictor.betting.policy import OddsPolicy
+from nfl_predictor.betting.policy import (
+    BookSettlementContract,
+    OddsPolicy,
+    load_odds_policy,
+)
 from nfl_predictor.capture.service import CaptureService
 from nfl_predictor.contracts.enums import Origin, ProvenanceGrade
 from nfl_predictor.contracts.events import EventVersion, ForecastOrigin
 from nfl_predictor.contracts.lineage import CaptureManifest, NormalizedFact
+from nfl_predictor.contracts.markets import MoneylineQuote
 from nfl_predictor.features.builder import FeatureBuilder
 from nfl_predictor.features.policy import load_feature_policy
 from nfl_predictor.features.schema import FEATURE_NAMES_V1
@@ -776,12 +781,21 @@ def test_replay_uses_only_pre_cutoff_archived_capture_batch(capture_fixture: Cap
 class _OddsAdapter:
     source = "the_odds_api"
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        payload: bytes = b"[]",
+        events: list[str] | None = None,
+    ) -> None:
         self.calls = 0
         self.raise_after_send = False
+        self.payload = payload
+        self.events = events
 
     def fetch(self, request: dict[str, Any]) -> RawResponse:
         self.calls += 1
+        if self.events is not None:
+            self.events.append("send")
         if self.raise_after_send:
             raise TimeoutError("sent but no response")
         return RawResponse(
@@ -790,46 +804,188 @@ class _OddsAdapter:
             request_started_at_utc=NOW - timedelta(seconds=2),
             response_received_at_utc=NOW,
             http_status=200,
-            payload=b"[]",
+            payload=self.payload,
             allowlisted_headers={
                 "x-requests-last": "1",
                 "x-requests-used": "1",
-                "x-requests-remaining": "499",
+                "x-requests-remaining": "399",
             },
         )
+
+
+class _ObservedOddsBudget(OddsBudget):
+    def __init__(self) -> None:
+        super().__init__(InMemoryBudgetRepository(), hard_stop=400)
+        self.events: list[str] = []
+        self.successful_finalizations = 0
+        self.uncertain_finalizations = 0
+
+    def reserve_required(self, month: str, request_id: str, credits: int) -> Any:
+        reservation = super().reserve_required(month, request_id, credits)
+        self.events.append("reserve")
+        return reservation
+
+    def finalize_success(
+        self,
+        reservation_id: str,
+        month: str,
+        used: int,
+        remaining: int,
+        last: int,
+    ) -> None:
+        super().finalize_success(reservation_id, month, used, remaining, last)
+        self.successful_finalizations += 1
+        self.events.append("authoritative")
+
+    def finalize_uncertain(self, reservation_id: str) -> None:
+        super().finalize_uncertain(reservation_id)
+        self.uncertain_finalizations += 1
+        self.events.append("uncertain")
+
+
+class _OddsFactory:
+    def __init__(self, budget: _ObservedOddsBudget) -> None:
+        self.budget = budget
+        self.raise_after_send = False
+        self.adapters: list[_OddsAdapter] = []
+        self.reservation_open_at_construction = False
+
+    def __call__(self, _: str) -> _OddsAdapter:
+        self.budget.events.append("construct")
+        self.reservation_open_at_construction = (
+            self.budget.state("2026-09").open_reserved == 1
+        )
+        adapter = _OddsAdapter(events=self.budget.events)
+        adapter.raise_after_send = self.raise_after_send
+        self.adapters.append(adapter)
+        return adapter
+
+
+def _odds_policy(*, books: tuple[str, ...] = ("book-a",)) -> OddsPolicy:
+    contracts = tuple(
+        BookSettlementContract(
+            book_key=book,
+            market_semantics_version="nfl-h2h-v1",
+            settlement_policy_url=f"https://example.test/{book}/rules",
+            settlement_policy_version="v1",
+            overtime_included=True,
+            tie_handling="push",
+            verified_on="2026-08-28",
+        )
+        for book in books
+    )
+    return load_odds_policy(Path("configs/odds_policy_v1.toml")).model_copy(
+        update={
+            "capture_enabled": True,
+            "book_allowlist": books,
+            "book_settlement_contracts": contracts,
+            "worst_case_monthly_credits": 1,
+        }
+    )
+
+
+def _odds_payload(
+    *, include_second_book: bool = False, include_rejection: bool = False
+) -> bytes:
+    bookmakers: list[dict[str, object]] = [
+        {
+            "key": "book-a",
+            "title": "Book A",
+            "last_update": (NOW - timedelta(minutes=1)).isoformat(),
+            "markets": [
+                {
+                    "key": "h2h",
+                    "outcomes": [
+                        {"id": "home-price", "name": "Chicago Bears", "price": 2.05},
+                        {"id": "away-price", "name": "Green Bay Packers", "price": 1.80},
+                    ],
+                }
+            ],
+        }
+    ]
+    if include_second_book:
+        second_book = dict(bookmakers[0])
+        second_book.update({"key": "book-b", "title": "Book B"})
+        bookmakers.append(second_book)
+    if include_rejection:
+        bookmakers.append(
+            {
+                "key": "secret-unapproved-book",
+                "title": "secret-provider-detail",
+                "last_update": NOW.isoformat(),
+                "markets": [],
+            }
+        )
+    return json.dumps(
+        [
+            {
+                "id": "provider-1",
+                "sport_key": "americanfootball_nfl",
+                "commence_time": _event().kickoff_at_utc.isoformat(),
+                "home_team": "Chicago Bears",
+                "away_team": "Green Bay Packers",
+                "bookmakers": bookmakers,
+            }
+        ]
+    ).encode()
 
 
 @pytest.fixture
 def odds_fixture(tmp_path: Path) -> Any:
     data_root = tmp_path / "private-data"
     data_root.mkdir()
-    adapter = _OddsAdapter()
-    budget = OddsBudget(InMemoryBudgetRepository(), hard_stop=400)
-    policy = OddsPolicy().model_copy(update={"capture_enabled": True})
+    lineage = DurableLineageRepository(tmp_path / "lineage", data_root)
+    budget = _ObservedOddsBudget()
+    adapter_factory = _OddsFactory(budget)
     capture = OptionalOddsCapture(
-        policy=policy,
+        policy=_odds_policy(),
         api_key="test-key",
         budget=budget,
         capture_service=CaptureService(data_root, lambda *_: None, BUILD),
-        adapter_factory=lambda _: adapter,
+        adapter_factory=adapter_factory,
         active_events=lambda: (_event(),),
         month=lambda _: "2026-09",
+        lineage=lineage,
     )
-    return type("OddsFixture", (), {"adapter": adapter, "budget": budget, "capture": capture, "obligation": _obligation()})()
+    return type(
+        "OddsFixture",
+        (),
+        {
+            "adapter_factory": adapter_factory,
+            "budget": budget,
+            "capture": capture,
+            "lineage": lineage,
+            "obligation": _obligation(),
+        },
+    )()
 
 
-def test_odds_reservation_precedes_adapter_and_uncertain_request_is_consumed(odds_fixture: Any) -> None:
-    odds_fixture.adapter.raise_after_send = True
+def test_odds_reservation_precedes_adapter_and_timeout_is_finalized_uncertain_once(
+    odds_fixture: Any,
+) -> None:
+    odds_fixture.adapter_factory.raise_after_send = True
 
     with pytest.raises(TimeoutError):
         odds_fixture.capture.capture(odds_fixture.obligation, "attempt-1")
 
     assert odds_fixture.budget.state("2026-09").consumed_local == 1
-    assert odds_fixture.adapter.calls == 1
+    assert odds_fixture.adapter_factory.reservation_open_at_construction is True
+    assert odds_fixture.adapter_factory.adapters[0].calls == 1
+    assert odds_fixture.budget.events == ["reserve", "construct", "send", "uncertain"]
+    assert odds_fixture.budget.successful_finalizations == 0
+    assert odds_fixture.budget.uncertain_finalizations == 1
 
 
-def test_disabled_odds_capture_does_not_construct_an_http_client(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("policy", "api_key"),
+    [(OddsPolicy(), "test-key"), (_odds_policy(), "   ")],
+)
+def test_disabled_or_blank_key_odds_capture_does_not_construct_an_http_client(
+    tmp_path: Path, policy: OddsPolicy, api_key: str
+) -> None:
     constructed = False
+    data_root = tmp_path / "private-data"
+    data_root.mkdir()
 
     def factory(_: str) -> _OddsAdapter:
         nonlocal constructed
@@ -837,13 +993,14 @@ def test_disabled_odds_capture_does_not_construct_an_http_client(tmp_path: Path)
         return _OddsAdapter()
 
     capture = OptionalOddsCapture(
-        policy=OddsPolicy(),
-        api_key="",
+        policy=policy,
+        api_key=api_key,
         budget=OddsBudget(InMemoryBudgetRepository(), 400),
-        capture_service=CaptureService(tmp_path, lambda *_: None, BUILD),
+        capture_service=CaptureService(data_root, lambda *_: None, BUILD),
         adapter_factory=factory,
         active_events=lambda: (_event(),),
         month=lambda _: "2026-09",
+        lineage=DurableLineageRepository(tmp_path / "lineage", data_root),
     )
 
     assert capture.enabled is False
@@ -852,15 +1009,117 @@ def test_disabled_odds_capture_does_not_construct_an_http_client(tmp_path: Path)
     assert constructed is False
 
 
-def test_odds_success_finalizes_allowlisted_quota_headers_without_key_in_bundle(
-    odds_fixture: Any,
-) -> None:
-    bundle = odds_fixture.capture.capture(odds_fixture.obligation, "attempt-1")
+def test_odds_capture_requires_a_real_durable_lineage_repository(tmp_path: Path) -> None:
+    with pytest.raises(TypeError, match="DurableLineageRepository"):
+        OptionalOddsCapture(
+            policy=_odds_policy(),
+            api_key="test-key",
+            budget=OddsBudget(InMemoryBudgetRepository(), 400),
+            capture_service=CaptureService(tmp_path, lambda *_: None, BUILD),
+            adapter_factory=lambda _: _OddsAdapter(),
+            active_events=lambda: (_event(),),
+            month=lambda _: "2026-09",
+            lineage=None,
+        )
 
-    assert odds_fixture.budget.state("2026-09").consumed_local == 1
+
+def test_odds_known_quota_is_authoritative_before_normalization_failure(tmp_path: Path) -> None:
+    data_root = tmp_path / "private-data"
+    data_root.mkdir()
+    budget = _ObservedOddsBudget()
+    capture = OptionalOddsCapture(
+        policy=_odds_policy(),
+        api_key="test-key",
+        budget=budget,
+        capture_service=CaptureService(data_root, lambda *_: None, BUILD),
+        adapter_factory=lambda _: _OddsAdapter(payload=b"not-json", events=budget.events),
+        active_events=lambda: (_event(),),
+        month=lambda _: "2026-09",
+        lineage=DurableLineageRepository(tmp_path / "lineage", data_root),
+    )
+
+    with pytest.raises(ValueError, match="odds payload is not valid JSON"):
+        capture.capture(_obligation(), "attempt-1")
+
+    state = budget.state("2026-09")
+    assert state.authoritative_used == 1
+    assert state.authoritative_remaining == 399
+    assert budget.successful_finalizations == 1
+    assert budget.uncertain_finalizations == 0
+    assert budget.events[-1] == "authoritative"
+
+
+def test_odds_persistence_failure_cannot_overwrite_authoritative_finalization(
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "private-data"
+    data_root.mkdir()
+
+    class FailingLineage(DurableLineageRepository):
+        def append_manifests(self, manifests: Sequence[CaptureManifest]) -> None:
+            raise RuntimeError("injected lineage failure")
+
+    budget = _ObservedOddsBudget()
+    capture = OptionalOddsCapture(
+        policy=_odds_policy(),
+        api_key="test-key",
+        budget=budget,
+        capture_service=CaptureService(data_root, lambda *_: None, BUILD),
+        adapter_factory=lambda _: _OddsAdapter(payload=_odds_payload(), events=budget.events),
+        active_events=lambda: (_event(),),
+        month=lambda _: "2026-09",
+        lineage=FailingLineage(tmp_path / "lineage", data_root),
+    )
+
+    with pytest.raises(RuntimeError, match="injected lineage failure"):
+        capture.capture(_obligation(), "attempt-1")
+
+    assert budget.successful_finalizations == 1
+    assert budget.uncertain_finalizations == 0
+    assert budget.state("2026-09").authoritative_remaining == 399
+
+
+def test_odds_success_persists_resolvable_manifest_and_every_quote_before_return(
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "private-data"
+    data_root.mkdir()
+    lineage = DurableLineageRepository(tmp_path / "lineage", data_root)
+    budget = _ObservedOddsBudget()
+    capture = OptionalOddsCapture(
+        policy=_odds_policy(books=("book-a", "book-b")),
+        api_key="test-key",
+        budget=budget,
+        capture_service=CaptureService(data_root, lambda *_: None, BUILD),
+        adapter_factory=lambda _: _OddsAdapter(
+            payload=_odds_payload(include_second_book=True, include_rejection=True),
+            events=budget.events,
+        ),
+        active_events=lambda: (_event(),),
+        month=lambda _: "2026-09",
+        lineage=lineage,
+    )
+
+    bundle = capture.capture(_obligation(), "attempt-1")
+
     manifest = next(row for row in bundle.records if isinstance(row, CaptureManifest))
+    quotes = tuple(row for row in bundle.records if isinstance(row, MoneylineQuote))
+    assert lineage.resolve_manifests([manifest.capture_id]) == [manifest]
+    assert len(quotes) == 2
+    assert tuple(
+        MoneylineQuote.model_validate(lineage.ledger.read("moneyline-quote-v1", quote.quote_id))
+        for quote in quotes
+    ) == quotes
+    assert budget.successful_finalizations == 1
+    assert budget.uncertain_finalizations == 0
     assert manifest.response_headers_allowlisted["x-requests-used"] == "1"
-    assert b"test-key" not in json.dumps(bundle.payload).encode()
+    assert bundle.payload == {
+        "quote_ids": [quote.quote_id for quote in quotes],
+        "rejection_codes": ["BOOK_NOT_ALLOWLISTED"],
+    }
+    serialized_payload = json.dumps(bundle.payload).encode()
+    assert b"test-key" not in serialized_payload
+    assert b"secret-provider-detail" not in serialized_payload
 
 
 def test_arrow_outcome_adapter_selects_exact_source_event(tmp_path: Path) -> None:
@@ -892,12 +1151,24 @@ def test_arrow_outcome_adapter_selects_exact_source_event(tmp_path: Path) -> Non
     assert captured.observation.home_score == 20
     assert captured.observation.away_score == 17
     assert captured.observation.raw_payload_sha256 == captured.manifest.raw_payload_sha256
+    assert captured.observation.home_team == "CHI"
+    assert captured.observation.away_team == "GB"
+    assert captured.observation.finalized_at_utc == NOW
+    assert captured.observation.source_observed_at_utc == NOW
+    assert captured.observation.observation_time_basis == "retrieval_fallback"
 
 
-def test_arrow_outcome_adapter_rejects_zero_or_multiple_source_event_matches(tmp_path: Path) -> None:
+@pytest.mark.parametrize("matching_rows", [0, 2])
+def test_arrow_outcome_adapter_rejects_zero_or_multiple_source_event_matches(
+    tmp_path: Path, matching_rows: int
+) -> None:
     data_root = tmp_path / "private-data"
     data_root.mkdir()
-    payload = _ipc(pl.concat([_schedules(), _schedules().head(1)]))
+    schedules = _schedules().filter(pl.col("game_id") != "2025_01_GB_CHI")
+    if matching_rows:
+        match = _schedules().filter(pl.col("game_id") == "2025_01_GB_CHI")
+        schedules = pl.concat([schedules, *([match] * matching_rows)])
+    payload = _ipc(schedules)
 
     class Source:
         source = "nflverse"
@@ -908,6 +1179,134 @@ def test_arrow_outcome_adapter_rejects_zero_or_multiple_source_event_matches(tmp
     adapter = ArrowOutcomeAdapter(CaptureService(data_root, lambda *_: None, BUILD), Source())
 
     with pytest.raises(ValueError, match="exactly one"):
+        adapter.capture({"source_event_id": "2025_01_GB_CHI"}, "outcome-run-1")
+
+
+def test_arrow_outcome_adapter_verifies_stored_raw_hash_before_parsing(tmp_path: Path) -> None:
+    data_root = tmp_path / "private-data"
+    data_root.mkdir()
+
+    def tamper_after_storage(_: bytes, manifest: CaptureManifest) -> None:
+        (data_root / manifest.raw_path).write_bytes(b"not-arrow-and-not-the-manifest-hash")
+
+    class Source:
+        source = "nflverse"
+
+        def fetch(self, request: dict[str, Any]) -> RawResponse:
+            return RawResponse("nflverse", "request", NOW, NOW, 200, _ipc(_schedules()), {})
+
+    adapter = ArrowOutcomeAdapter(CaptureService(data_root, tamper_after_storage, BUILD), Source())
+
+    with pytest.raises(ValueError, match="raw file hash does not match manifest"):
+        adapter.capture({"source_event_id": "2025_01_GB_CHI"}, "outcome-run-1")
+
+
+@pytest.mark.parametrize("schema_change", ["missing", "unexpected"])
+def test_arrow_outcome_adapter_requires_exact_frozen_schedule_fields(
+    tmp_path: Path, schema_change: str
+) -> None:
+    data_root = tmp_path / "private-data"
+    data_root.mkdir()
+    schedules = _schedules()
+    if schema_change == "missing":
+        schedules = schedules.drop("stadium_id")
+    else:
+        schedules = schedules.with_columns(pl.lit("postponed").alias("game_status"))
+
+    class Source:
+        source = "nflverse"
+
+        def fetch(self, request: dict[str, Any]) -> RawResponse:
+            return RawResponse("nflverse", "request", NOW, NOW, 200, _ipc(schedules), {})
+
+    adapter = ArrowOutcomeAdapter(CaptureService(data_root, lambda *_: None, BUILD), Source())
+
+    with pytest.raises(ValueError, match="exact frozen schedule fields"):
+        adapter.capture({"source_event_id": "2025_01_GB_CHI"}, "outcome-run-1")
+
+
+def test_arrow_outcome_adapter_maps_absent_scores_to_unresolved_without_guessing(
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "private-data"
+    data_root.mkdir()
+
+    class Source:
+        source = "nflverse"
+
+        def fetch(self, request: dict[str, Any]) -> RawResponse:
+            return RawResponse("nflverse", "request", NOW, NOW, 200, _ipc(_schedules()), {})
+
+    adapter = ArrowOutcomeAdapter(CaptureService(data_root, lambda *_: None, BUILD), Source())
+    captured = adapter.capture(
+        {"source_event_id": "2026_02_GB_CHI"}, "outcome-run-unresolved"
+    )
+
+    assert captured.observation.game_status == "unresolved"
+    assert captured.observation.home_score is None
+    assert captured.observation.away_score is None
+    assert captured.observation.finalized_at_utc is None
+    assert captured.observation.source_observed_at_utc == NOW
+    assert captured.observation.observation_time_basis == "retrieval_fallback"
+
+
+@pytest.mark.parametrize(
+    ("home_score", "away_score"), [(20, None), (None, 17)]
+)
+def test_arrow_outcome_adapter_rejects_partial_scores(
+    tmp_path: Path, home_score: int | None, away_score: int | None
+) -> None:
+    data_root = tmp_path / "private-data"
+    data_root.mkdir()
+    schedules = _schedules().with_columns(
+        pl.when(pl.col("game_id") == "2025_01_GB_CHI")
+        .then(pl.lit(home_score, dtype=pl.Int64))
+        .otherwise(pl.col("home_score"))
+        .alias("home_score"),
+        pl.when(pl.col("game_id") == "2025_01_GB_CHI")
+        .then(pl.lit(away_score, dtype=pl.Int64))
+        .otherwise(pl.col("away_score"))
+        .alias("away_score"),
+    )
+
+    class Source:
+        source = "nflverse"
+
+        def fetch(self, request: dict[str, Any]) -> RawResponse:
+            return RawResponse("nflverse", "request", NOW, NOW, 200, _ipc(schedules), {})
+
+    adapter = ArrowOutcomeAdapter(CaptureService(data_root, lambda *_: None, BUILD), Source())
+
+    with pytest.raises(ValueError, match="both present or both absent"):
+        adapter.capture({"source_event_id": "2025_01_GB_CHI"}, "outcome-run-1")
+
+
+@pytest.mark.parametrize(("home_team", "away_team"), [("XYZ", "GB"), ("GB", "GB")])
+def test_arrow_outcome_adapter_rejects_invalid_or_identical_teams(
+    tmp_path: Path, home_team: str, away_team: str
+) -> None:
+    data_root = tmp_path / "private-data"
+    data_root.mkdir()
+    schedules = _schedules().with_columns(
+        pl.when(pl.col("game_id") == "2025_01_GB_CHI")
+        .then(pl.lit(home_team))
+        .otherwise(pl.col("home_team"))
+        .alias("home_team"),
+        pl.when(pl.col("game_id") == "2025_01_GB_CHI")
+        .then(pl.lit(away_team))
+        .otherwise(pl.col("away_team"))
+        .alias("away_team"),
+    )
+
+    class Source:
+        source = "nflverse"
+
+        def fetch(self, request: dict[str, Any]) -> RawResponse:
+            return RawResponse("nflverse", "request", NOW, NOW, 200, _ipc(schedules), {})
+
+    adapter = ArrowOutcomeAdapter(CaptureService(data_root, lambda *_: None, BUILD), Source())
+
+    with pytest.raises(ValueError, match="unknown NFL team|home and away teams must differ"):
         adapter.capture({"source_event_id": "2025_01_GB_CHI"}, "outcome-run-1")
 
 

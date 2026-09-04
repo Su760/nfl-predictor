@@ -787,8 +787,10 @@ class OptionalOddsCapture:
         adapter_factory: _OddsAdapterFactory,
         active_events: Callable[[], Iterable[EventVersion]],
         month: Callable[[OriginObligation], str],
-        lineage: DurableLineageRepository | None = None,
+        lineage: DurableLineageRepository,
     ) -> None:
+        if not isinstance(lineage, DurableLineageRepository):
+            raise TypeError("odds capture requires a DurableLineageRepository")
         self.policy = policy
         self.api_key = api_key or ""
         self.budget = budget
@@ -808,6 +810,7 @@ class OptionalOddsCapture:
         month = self.month(obligation)
         request_id = f"{obligation.idempotency_key}:{attempt_id}"
         reservation = self.budget.reserve_required(month, request_id, 1)
+        authoritative_finalized = False
         try:
             adapter = self.adapter_factory(self.api_key)
             manifest = self.capture_service.capture(
@@ -816,20 +819,21 @@ class OptionalOddsCapture:
                 attempt_id,
             )
             quota = self._quota_headers(manifest.response_headers_allowlisted)
+            self.budget.finalize_success(reservation.reservation_id, month, *quota)
+            authoritative_finalized = True
             normalized = normalize_h2h(
                 (self.capture_service.data_root / manifest.raw_path).read_bytes(),
                 manifest,
                 self.active_events(),
                 self.policy,
             )
-            self.budget.finalize_success(reservation.reservation_id, month, *quota)
-        except Exception:
-            self.budget.finalize_uncertain(reservation.reservation_id)
-            raise
-        if self.lineage is not None:
             self.lineage.append_manifests((manifest,))
             for quote in normalized.quotes:
                 self.lineage.ledger.append("moneyline-quote-v1", quote.quote_id, quote)
+        except Exception:
+            if not authoritative_finalized:
+                self.budget.finalize_uncertain(reservation.reservation_id)
+            raise
         return CaptureBundle(
             (manifest, *normalized.quotes),
             {
@@ -859,6 +863,8 @@ class ArrowOutcomeAdapter(OutcomeAdapter):
             raise ValueError("outcome request requires source_event_id")
         manifest = self.capture_service.capture(self.source, request, run_id)
         payload = (self.capture_service.data_root / manifest.raw_path).read_bytes()
+        if hashlib.sha256(payload).hexdigest() != manifest.raw_payload_sha256:
+            raise ValueError("captured raw file hash does not match manifest")
         return OutcomeCapture(manifest, self._normalize_arrow(payload, manifest, source_event_id))
 
     @staticmethod
@@ -869,9 +875,8 @@ class ArrowOutcomeAdapter(OutcomeAdapter):
             frame = pl.read_ipc(BytesIO(payload))
         except Exception as error:
             raise ValueError("outcome schedules IPC payload is unreadable") from error
-        missing = sorted(_SCHEDULE_COLUMNS - set(frame.columns))
-        if missing:
-            raise ValueError(f"outcome schedules missing required columns: {', '.join(missing)}")
+        if set(frame.columns) != _SCHEDULE_COLUMNS:
+            raise ValueError("outcome schedules must use exact frozen schedule fields")
         rows = cast(
             list[dict[str, object]], frame.select(sorted(_SCHEDULE_COLUMNS)).to_dicts()
         )
@@ -881,7 +886,13 @@ class ArrowOutcomeAdapter(OutcomeAdapter):
         row = matches[0]
         home_score = _score(row["home_score"], "home_score")
         away_score = _score(row["away_score"], "away_score")
+        if (home_score is None) != (away_score is None):
+            raise ValueError("outcome scores must be both present or both absent")
         status = "final" if home_score is not None and away_score is not None else "unresolved"
+        home_team = _team(row["home_team"], "home_team")
+        away_team = _team(row["away_team"], "away_team")
+        if home_team == away_team:
+            raise ValueError("outcome home and away teams must differ")
         source_observed = manifest.source_snapshot_at_utc or manifest.response_received_at_utc
         return OutcomeObservation(
             source=manifest.source,
@@ -889,8 +900,8 @@ class ArrowOutcomeAdapter(OutcomeAdapter):
             game_status=cast(OutcomeStatus, status),
             home_score=home_score if status == "final" else None,
             away_score=away_score if status == "final" else None,
-            home_team=_team(row["home_team"], "home_team"),
-            away_team=_team(row["away_team"], "away_team"),
+            home_team=home_team,
+            away_team=away_team,
             finalized_at_utc=source_observed if status == "final" else None,
             source_observed_at_utc=source_observed,
             retrieved_at_utc=manifest.response_received_at_utc,
