@@ -363,9 +363,9 @@ locked files.
 **Interfaces:**
 
 - Consumes: `ArtifactStore`, `ArtifactMetadata`, `ProbabilityModel`, calibrator `transform`, `TieLayer`, `FEATURE_SCHEMA_V1`, `ArtifactBinding`, `OddsPolicy`, `CandidatePolicy`, and `build_market_comparator`.
-- Produces: `FrozenForecastArtifact`, `VerifiedArtifactRegistry.from_private_config(artifact_root, registry_path)`, `for_origin(origin)`, `VerifiedForecastPredictor.predict(...)`, `DurableCalibrationBins.lookup(...)`, and `ProductionMarketLayer.evaluate(...)`.
+- Produces: `FrozenForecastArtifact`, `VerifiedArtifactRegistry.from_private_config(private_root, artifact_root, registry_path, expected_registry_sha256)`, `for_origin(origin)`, `VerifiedForecastPredictor.predict(...)`, bounded `DurableCalibrationBins.lookup(...)`, and `ProductionMarketLayer.evaluate(...)`.
 
-- [ ] **Step 1: Write failing registry and tamper tests**
+- [x] **Step 1: Write failing registry and tamper tests**
 
 ```python
 def test_registry_returns_one_verified_frozen_champion_per_origin(artifact_fixture):
@@ -382,7 +382,7 @@ def test_registry_rejects_registry_or_artifact_tamper(artifact_fixture):
 
 Cover duplicate champions, origin mismatch, uncommitted artifact, wrong code SHA, wrong dependency-lock SHA, wrong feature policy/schema, unknown role, and a registry SHA that does not match the reviewed private configuration.
 
-- [ ] **Step 2: Write failing probability and market tests**
+- [x] **Step 2: Write failing probability and market tests**
 
 ```python
 def test_predictor_uses_schema_order_calibrator_and_tie_layer(runtime_prediction_fixture):
@@ -402,13 +402,13 @@ def test_market_layer_returns_comparator_and_both_audited_decisions(market_fixtu
     assert all(candidate.fixed_stake_units == Decimal(1) for candidate in evaluation.candidates)
 ```
 
-- [ ] **Step 3: Run focused tests and verify RED**
+- [x] **Step 3: Run focused tests and verify RED**
 
 Run: `uv run pytest tests/runtime/test_artifacts.py tests/runtime/test_markets.py -q`
 
 Expected: failures because the production registry/predictor/market adapters do not exist.
 
-- [ ] **Step 4: Implement a verified frozen artifact bundle and registry**
+- [x] **Step 4: Implement a verified frozen artifact bundle and registry**
 
 ```python
 @dataclass(frozen=True)
@@ -429,17 +429,17 @@ class VerifiedArtifactRegistry:
         return bindings
 ```
 
-The registry document has an exact Pydantic schema and is hash-pinned by runtime configuration. `_verify_entry` calls `ArtifactStore.load_verified`, requires `FrozenForecastArtifact`, checks metadata origin/lane/policy/code/lock values, and creates `ArtifactBinding(frozen=True, verified=True, ...)`. Never load an artifact solely because a registry entry names it.
+The registry document has an exact Pydantic schema and is hash-pinned by runtime configuration. Each entry independently anchors marker, metadata, and payload bytes. `_verify_entry` verifies those exact bytes plus metadata origin/lane/policy/code/lock values before deserializing the already-verified in-memory payload, requires `FrozenForecastArtifact`, and creates `ArtifactBinding(frozen=True, verified=True, ...)`. Artifact and registry paths must resolve under the explicit trusted private root, including after symlink resolution. Never load an artifact solely because a registry entry names it.
 
-- [ ] **Step 5: Implement deterministic prediction**
+- [x] **Step 5: Implement deterministic prediction**
 
 Create a `float64` row in exact `FEATURE_SCHEMA_V1` order, call `model.predict_r_home`, call the frozen calibrator's `transform`, then `to_three_way(calibrated_r_home, tie_layer.p_tie)`. Convert probabilities through `Decimal(str(value))`, quantize only by the existing contract tolerance, and generate the prediction ID from canonical origin-run/artifact/snapshot/policy lineage. Populate every field checked by `ForecastWorkflow._validate_prediction`; replay carries the context reconstruction reason.
 
-- [ ] **Step 6: Implement the market composition**
+- [x] **Step 6: Implement the market composition**
 
-`ProductionMarketLayer` resolves the exact active event, constructs `OfficialEventState(status="pregame")`, derives one trusted provider source match from the normalized quotes, builds the comparator from the selected capture, and delegates both sides to `CandidatePolicy`. Persist calibration evidence behind `DurableCalibrationBins`; only frozen, out-of-sample, same-origin evidence strictly before the decision can be returned. Return all selected quotes, rejected/candidate decisions, and only non-null displayed candidates in `MarketEvaluation`.
+`ProductionMarketLayer` resolves the exact active event, constructs `OfficialEventState(status="pregame")`, derives one trusted provider source match from the normalized quotes, builds the comparator from the selected capture, and delegates both sides to `CandidatePolicy`. Persist calibration evidence and local frozen probability-bin bounds behind `DurableCalibrationBins`; only the unique containing `[lower, upper)` bin (with `1.0` admitted by the final upper-1 bin) that is frozen, out-of-sample, same-origin, and strictly before the decision can be returned. The evidence path must remain under the explicit trusted private root. Return all selected quotes, rejected/candidate decisions, and only non-null displayed candidates in `MarketEvaluation`.
 
-- [ ] **Step 7: Run Task 3 tests and static checks**
+- [x] **Step 7: Run Task 3 tests and static checks**
 
 Run:
 
@@ -451,11 +451,20 @@ uv run mypy src/nfl_predictor/runtime/artifacts.py src/nfl_predictor/runtime/mar
 
 Expected: PASS, including tamper and exact-vector tests.
 
-- [ ] **Step 8: Review checkpoint**
+- [x] **Step 8: Review checkpoint**
 
 Run: `git diff -- src/nfl_predictor/runtime/artifacts.py src/nfl_predictor/runtime/markets.py tests/runtime/test_artifacts.py tests/runtime/test_markets.py`
 
 Expected: only the four Task 3 files; leave them unstaged.
+
+**Acceptance evidence (2026-09-04):** Commits `38ee636..f9dec01` add the exact four-file
+runtime surface. Independent review's 2 Critical and 2 Important findings were resolved in
+one fix round: no serialized payload is used before independently anchored registry/content,
+code, and dependency-lock verification; every runtime path is private-root-contained; and
+calibration evidence is selected by probability-bin membership. Re-review approved all five
+finding/test items with no new breakage. Fresh controller verification passed 309 focused and
+962 full offline tests, scoped Ruff, mypy, and diff checks. One nonblocking coverage note remains
+for the directly enforced off-root `artifact_root` branch.
 
 ---
 
