@@ -53,7 +53,7 @@ def _metadata(artifact_id: str = "champion-v1", **changes: object) -> ArtifactMe
         "calibrator_family": "test-calibrator",
         "origin": Origin.T60,
         "model_lane": "football_only",
-        "feature_schema_version": "schema-v1",
+        "feature_schema_version": "feature-schema-v1",
         "feature_policy_version": "features-v1",
         "model_policy_version": "model-v1",
         "calibration_policy_version": "calibration-v1",
@@ -84,7 +84,7 @@ def _entry(
         "origin": "T60",
         "model_role": "champion",
         "model_lane": "football_only",
-        "feature_schema_version": "schema-v1",
+        "feature_schema_version": "feature-schema-v1",
         "feature_policy_version": "features-v1",
         "policy_versions": {"model": "model-v1", "calibration": "calibration-v1"},
         "market_policy_version": "odds-v1",
@@ -288,7 +288,7 @@ def _snapshot(values: dict[str, float]) -> FeatureSnapshot:
         origin=Origin.T60,
         decision_at_utc=NOW,
         feature_policy_version="features-v1",
-        feature_schema_version="schema-v1",
+        feature_schema_version="feature-schema-v1",
         values=values,
         input_manifest_ids=["manifest-v1"],
         input_fact_ids=["fact-v1"],
@@ -324,5 +324,5 @@ def test_predictor_uses_schema_order_calibrator_and_tie_layer(artifact_fixture) 
     assert prediction.p_tie == Decimal("0.02")
     assert prediction.p_home + prediction.p_away + prediction.p_tie == 1
     assert prediction.prediction_id == hashlib.sha256(
-        b"run-v1|champion-v1|snapshot-v1|features-v1|schema-v1|forecast-v1"
+        b"run-v1|champion-v1|snapshot-v1|features-v1|feature-schema-v1|forecast-v1"
     ).hexdigest()

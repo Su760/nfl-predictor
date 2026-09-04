@@ -266,7 +266,7 @@ class VerifiedForecastPredictor:
     @staticmethod
     def _feature_row(snapshot: FeatureSnapshot) -> NDArray[np.float64]:
         names = tuple(name for name, _ in FEATURE_SCHEMA_V1)
-        if set(snapshot.values) != set(names) or snapshot.feature_schema_version != "schema-v1":
+        if set(snapshot.values) != set(names) or snapshot.feature_schema_version != "feature-schema-v1":
             raise ValueError("feature snapshot values do not match FEATURE_SCHEMA_V1")
         try:
             row = np.asarray([[snapshot.values[name] for name in names]], dtype=np.float64)
