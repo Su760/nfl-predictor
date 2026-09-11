@@ -83,7 +83,7 @@ Scope: ops/week1_viewer.py, ops/viewer/index.html, ops/viewer/app.js, ops/viewer
 - [x] Build readable responsive dashboard, clickable /games/<id>, performance view; model identity and tie probability explicit.
 - [x] Connect matched horizon update comparisons, candidate experiments and decisions; never outcome-select revisions or auto-promote.
 - [x] Verify realSF@LA flow, allgamecoverage, deadline/clock/corrections/duplicates, desktop/mobile/screenshots, meaningful regression suite.
-- [ ] Activate locally, verify URLs/worker, commit/push coherent V2 milestones, report exact full-model/data/hosting blockers.
+- [x] Activate locally, verify URLs/worker, commit/push coherent V2 milestones, report exact full-model/data/hosting blockers.
 
 Status terms: implemented, tested, running locally and deployed are separate. Localhost is not clouddeployment.
 
@@ -96,6 +96,10 @@ Status terms: implemented, tested, running locally and deployed are separate. Lo
 - Running locally: season worker restarted with analysis integration; healthy heartbeat verified. Latest source check22:15Z; nextscheduled00:15Z. Existing two-hour input and candidate-evaluation cadence retained.
 - Still blocked: no reviewed full V2 champion package/registry or validated historical original pregame timestamps; EPA candidate worse than Elo. No matched live challenger scorecard yet. New context experiments await valid timestamped data and predeclared untouched periods.
 - Not cloud deployed: loopback viewer and launchd require this Mac awake/online; no verified zero-cost private persistent hosting/storage/authentication. Simulation code/history retained, new runs paused by config.
-- Source/UI commits and remote verification pending final packaging.
+- Source/UI milestone committed and pushed: bbf052ec810ef603ded33ee715a44fe9af77d3fb; remote SHA verified equal to local. Final worker restarted; dashboard /health returned status=ok.
 
 Final checks: 272/272 live game-detail routes reconcile with scorecards; six isolated browser outcome states pass; weekly selector works; actual new ATL@PIT explanation is VERIFIED/PREGAME at generation; original SF@LA forecast hash unchanged. Desktop/mobile/dashboard/game/postgame/performance screenshots captured privately under /tmp. Fullsuite1,187passed, zeroexclusions, changedfileRuffclean.
+
+
+Delivered URLs (local only): http://127.0.0.1:8510/ ; http://127.0.0.1:8510/games/2026_01_SF_LA ; http://127.0.0.1:8510/performance .
+Source milestone: https://github.com/Su760/nfl-predictor/commit/bbf052ec810ef603ded33ee715a44fe9af77d3fb . No credentials, private captures, DBs or screenshots staged. Accepted unchanged legacy lint exception preserved. The final source test run passed1,187; no skipped/excluded regression tests. All requested unblocked interface/analysis work is implemented, tested and running locally; full V2 promotion and cloud deployment remain explicitly blocked above.
