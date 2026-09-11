@@ -239,3 +239,38 @@ def test_venue_metadata_migration_preserves_actual_schedule_but_not_reschedule()
     current.update(kickoff=old["kickoff"], venue={"id":"456"}, schedule_version="relocated")
     live.preserve_schedule_identity(current, old)
     assert current["schedule_version"] == "relocated"
+
+
+def test_live_final_correction_retraction_restart_keeps_forecasts(tmp_path, monkeypatch):
+    cfg, at, base_fetch = fake_tick(monkeypatch, tmp_path)
+    cfg.pop("simulation_config", None)
+    initial = live.run_once(cfg, tmp_path, clock=lambda: at, fetcher=base_fetch)
+    original = initial["games"][0]["predictions"]
+    after = at + timedelta(days=3)
+    result = {"status":"FINAL", "home_score":21, "away_score":10}
+
+    def source(*args):
+        value = base_fetch(*args)
+        for check in value["checks"].values():
+            check["captured_at"] = live.stamp(after)
+        value["games"][0]["status"] = "STATUS_FINAL" if result else "STATUS_IN_PROGRESS"
+        if result:
+            value["games"][0]["result"] = dict(result)
+        return value
+
+    first = live.run_once(cfg, tmp_path, clock=lambda: after, fetcher=source)
+    assert first["scorecards"]["summary"]["season"]["winner_accuracy_denominator"] == 1
+    result.update(home_score=10, away_score=21)
+    corrected = live.run_once(cfg, tmp_path, clock=lambda: after, fetcher=source)
+    assert corrected["scorecards"]["summary"]["season"]["correct"] != first["scorecards"]["summary"]["season"]["correct"]
+    result.clear()
+    retracted = live.run_once(cfg, tmp_path, clock=lambda: after, fetcher=source)
+    assert retracted["scorecards"]["summary"]["season"]["winner_accuracy_denominator"] == 0
+    (tmp_path / "view.json").unlink()
+    result.update(status="FINAL", home_score=10, away_score=21)
+    restored = live.run_once(cfg, tmp_path, clock=lambda: after, fetcher=source)
+    game = restored["games"][0]
+    assert game["predictions"] == original
+    assert [o["version"] for o in game["outcomes"]] == [1, 2, 3, 4]
+    assert [o["status"] for o in game["outcomes"]] == ["FINAL", "FINAL", "UNRESOLVED", "FINAL"]
+    assert restored["scorecards"]["summary"]["season"]["winner_accuracy_denominator"] == 1

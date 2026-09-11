@@ -52,7 +52,9 @@ Local uptime limitation persists; launchd stays private. No arbitrary playoff ti
 - [x] Weekly immutable analysis/improvement entries implemented and running; partial until week finalized. No automatic model promotion.
 - [x] Season/postseason simulation implemented, tested, running locally; automatic material-evidence refresh and dated history visible. Uncalibrated strength sensitivity explicitly labeled.
 - [x] Full suite 1,136 passed, zero exclusions; focused changed-file Ruff passed. Legacy unchanged lint exception remains accepted.
-- [ ] Commit/push season runtime, scoring, simulations and recovery milestone after staged secret/path check.
+- [x] Season runtime, scoring and simulations committed/pushed 87cbca9; remote SHA verified.
+- [x] Candidate evaluate-if-changed ledger implemented/tested and local launchd installed; first scheduled run exited 0. Dataset/code/config identity controls immutable experiment reuse.
+- [ ] Recovery source milestone commit/push pending staged path check.
 - [ ] Full V2 production promotion BLOCKED: challenger underperforms; historical captures cannot establish original PIT availability; no reviewed champion package/registry.
 - [ ] Official inactives parsing BLOCKED: current source adapter archives page but has no verified exhaustive per-game parser. Weather lacks provider issuance time. Neither adjusts Elo probabilities.
 - [ ] Cloud deployment BLOCKED: no persistent private hosting/storage/authentication with verified zero-paid compute allowance. Local Mac must stay awake/online.
