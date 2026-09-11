@@ -264,6 +264,8 @@ def _games(scoreboard: bytes, rows: list[dict[str, str]], season: int) -> list[d
                 "week": int(event["week"]["number"]),
                 "home": home,
                 "away": away,
+                "home_name": home_row["team"].get("displayName"),
+                "away_name": away_row["team"].get("displayName"),
                 "kickoff": kickoff,
                 "time_valid": time_valid,
                 "neutral_site": identity["neutral_site"],
@@ -363,6 +365,159 @@ def _injuries(
     )
 
 
+ARTICLE_TEAM_LABELS = {**TEAM_NAMES, "NINERS": "SF"}
+
+
+def _inactive_links(body: bytes, maximum: int) -> list[str]:
+    text = body.decode("utf-8", errors="replace")
+    links = []
+    for match in re.finditer(
+        r'href=["\']([^"\']*/news/[^"\']*-inactives-[^"\']*)', text, re.IGNORECASE
+    ):
+        path = match.group(1)
+        url = urllib.parse.urljoin("https://www.nfl.com", path)
+        parsed = urllib.parse.urlsplit(url)
+        if parsed.scheme != "https" or parsed.netloc != "www.nfl.com" or not parsed.path.startswith("/news/"):
+            continue
+        if url not in links:
+            links.append(url)
+    return links[:maximum]
+
+
+def _news_article(body: bytes) -> dict[str, Any]:
+    text = body.decode("utf-8", errors="replace")
+    for match in re.finditer(
+        r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+        text,
+        re.IGNORECASE | re.DOTALL,
+    ):
+        try:
+            value = json.loads(match.group(1))
+        except json.JSONDecodeError:
+            continue
+        values = value if isinstance(value, list) else [value]
+        for item in values:
+            if isinstance(item, dict) and item.get("@type") == "NewsArticle":
+                return item
+    raise ValueError("OFFICIAL_INACTIVES_NEWS_ARTICLE_MISSING")
+
+
+def _inactive_article(
+    body: bytes, game: dict[str, Any], source_url: str, *,
+    captured_at: datetime | None = None, maximum_age_seconds: int | None = None,
+) -> tuple[list[dict[str, Any]], str]:
+    article = _news_article(body)
+    headline = article.get("headline")
+    description = article.get("description")
+    published = article.get("datePublished")
+    body_text = article.get("articleBody")
+    if not all(isinstance(value, str) for value in (headline, description, published, body_text)):
+        raise TypeError("OFFICIAL_INACTIVES_ARTICLE_FIELDS_INVALID")
+    context = f"{headline} {description}"
+    published_time = datetime.fromisoformat(published)
+    modified_time = datetime.fromisoformat(article.get("dateModified") or published)
+    if published_time.tzinfo is None or modified_time.tzinfo is None or modified_time < published_time:
+        raise ValueError("OFFICIAL_INACTIVES_INVALID_SOURCE_TIME")
+    effective_time = max(published_time, modified_time)
+    if captured_at is not None and effective_time > captured_at:
+        raise ValueError("OFFICIAL_INACTIVES_SOURCE_TIME_FROM_FUTURE")
+    stated_years = {int(value) for value in re.findall(r"\b20\d{2}\b", context)}
+    if stated_years and stated_years != {game["season"]}:
+        raise ValueError("OFFICIAL_INACTIVES_SEASON_MISMATCH")
+    week = re.search(r"Week\s+(\d+)", context, re.IGNORECASE)
+    if week and int(week.group(1)) != game["week"]:
+        raise ValueError("OFFICIAL_INACTIVES_WEEK_MISMATCH")
+    expected = f"{game['away_name']} at {game['home_name']}"
+    if any(expected.casefold() not in value.casefold() for value in (headline, description)):
+        raise ValueError("OFFICIAL_INACTIVES_TEAMS_MISMATCH")
+    if maximum_age_seconds is None:
+        import tomllib
+        maximum_age_seconds = tomllib.loads((Path(__file__).resolve().parents[1] / "configs/season_live.toml").read_text())["maximum_inactive_publication_age_seconds"]
+    kickoff = datetime.fromisoformat(game["kickoff"]) if game["kickoff"] else None
+    if kickoff is None or kickoff.tzinfo is None or not 0 < (kickoff - published_time).total_seconds() <= maximum_age_seconds or effective_time >= kickoff:
+        raise ValueError("OFFICIAL_INACTIVES_NOT_PREGAME")
+    lines = [re.sub(r"\s+", " ", line).strip() for line in body_text.splitlines()]
+    headings: list[tuple[int, str]] = []
+    expected_teams = {game["away"], game["home"]}
+    for index, line in enumerate(lines):
+        team = ARTICLE_TEAM_LABELS.get(line.upper()) or TEAM_NAMES.get(line.title())
+        if team in expected_teams:
+            headings.append((index, team))
+    if len(headings) != 2 or {team for _, team in headings} != expected_teams:
+        raise ValueError("OFFICIAL_INACTIVES_TEAM_SECTIONS_MISSING")
+    headings.sort()
+    rows = []
+    for heading_index, (start, team) in enumerate(headings):
+        end = headings[heading_index + 1][0] if heading_index + 1 < len(headings) else len(lines)
+        for line in lines[start + 1 : end]:
+            if not line:
+                continue
+            player = re.fullmatch(r"([A-Z]{1,3})\s+(.+)", line)
+            if player is None:
+                raise ValueError("OFFICIAL_INACTIVES_PLAYER_ROW_INVALID")
+            rows.append(
+                {
+                    "team": team,
+                    "position": player.group(1),
+                    "player": player.group(2),
+                    "emergency_third_qb": "emergency third qb" in player.group(2).casefold(),
+                    "source_url": source_url,
+                    "published_at": _stamp(published_time),
+                    "modified_at": _stamp(modified_time),
+                }
+            )
+    if {row["team"] for row in rows} != expected_teams:
+        raise ValueError("OFFICIAL_INACTIVES_TEAM_SECTIONS_EMPTY")
+    return rows, _stamp(effective_time)
+
+
+def _inactives(
+    landing: bytes,
+    cfg: dict[str, Any],
+    root: Path,
+    clock,
+    games: list[dict[str, Any]],
+) -> tuple[dict[str, tuple[list[dict[str, Any]], dict[str, Any]]], dict[str, Any]]:
+    links = _inactive_links(landing, cfg["maximum_inactive_articles"])
+    matched: dict[str, tuple[list[dict[str, Any]], dict[str, Any]]] = {}
+    errors = []
+    receipts = []
+    for url in links:
+        try:
+            body, receipt = _fetch(url, {**cfg, "allowed_hosts": ["www.nfl.com"]}, root, clock, "html")
+            receipts.append(receipt)
+            article = _news_article(body)
+            candidates = [
+                game
+                for game in games
+                if game["away_name"]
+                and game["home_name"]
+                and f"{game['away_name']} at {game['home_name']}".casefold()
+                in f"{article.get('headline', '')} {article.get('description', '')}".casefold()
+            ]
+            if len(candidates) != 1:
+                raise ValueError("OFFICIAL_INACTIVES_GAME_MATCH_AMBIGUOUS")
+            rows, published = _inactive_article(body, candidates[0], url, captured_at=datetime.fromisoformat(receipt["captured_at"]), maximum_age_seconds=cfg["maximum_inactive_publication_age_seconds"])
+            check = _status(receipt, "AVAILABLE", None, source_updated_at=published)
+            event_id = candidates[0]["game_id"]
+            previous = matched.get(event_id)
+            if previous is None or datetime.fromisoformat(published) > datetime.fromisoformat(previous[1]["source_updated_at"]):
+                matched[event_id] = (rows, check)
+        except Exception as error:  # noqa: BLE001 - individual official article is reported
+            errors.append(f"{url}: {type(error).__name__}: {error}")
+    base = {
+        "status": "AVAILABLE" if matched else "MISSING",
+        "reason": None if matched else "NO_VERIFIED_PREGAME_OFFICIAL_INACTIVES",
+        "articles_discovered": len(links),
+        "articles_verified": len(matched),
+        "article_errors": errors,
+        "captured_at": receipts[-1]["captured_at"] if receipts else None,
+        "source_updated_at": None,
+        "raw_sha256": None,
+    }
+    return matched, base
+
+
 def _depth(
     body: bytes, receipt: dict[str, Any], cfg: dict[str, Any], clock: datetime
 ) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
@@ -457,11 +612,13 @@ def fetch_sources(cfg: dict[str, Any], root: Path, clock) -> dict[str, Any]:
         reports = {}
         injury_check = _status(missing, "MISSING", optional_errors["injuries_url"])
     if "inactives_url" in captures:
-        inactive_receipt = captures["inactives_url"][1]
-        inactive_check = _status(
-            inactive_receipt, "UNPARSED", "OFFICIAL_INACTIVES_STRUCTURE_UNVERIFIED"
+        inactive_matches, inactive_check = _inactives(
+            captures["inactives_url"][0], cfg, root, clock, games
         )
+        inactive_check["captured_at"] = captures["inactives_url"][1]["captured_at"]
+        inactive_check["raw_sha256"] = captures["inactives_url"][1]["raw_sha256"]
     else:
+        inactive_matches = {}
         inactive_check = _status(missing, "MISSING", optional_errors["inactives_url"])
     if "depth_url" in captures:
         try:
@@ -522,7 +679,20 @@ def fetch_sources(cfg: dict[str, Any], root: Path, clock) -> dict[str, Any]:
                 if game_injury_check["status"] == "AVAILABLE"
                 else [],
             ),
-            "inactives": _input(inactive_check, []),
+            "inactives": _input(
+                inactive_matches.get(
+                    game["game_id"],
+                    (
+                        [],
+                        {
+                            **inactive_check,
+                            "status": "MISSING",
+                            "reason": "NO_VERIFIED_PREGAME_OFFICIAL_INACTIVES_FOR_GAME",
+                        },
+                    ),
+                )[1],
+                inactive_matches.get(game["game_id"], ([], inactive_check))[0],
+            ),
             "expected_qb": _input(
                 game_depth_check,
                 {game["home"]: qbs.get(game["home"]), game["away"]: qbs.get(game["away"])},

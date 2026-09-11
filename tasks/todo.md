@@ -51,12 +51,14 @@ Local uptime limitation persists; launchd stays private. No arbitrary playoff ti
 - [x] Chronological evaluation: 2025 untouched holdout, 265 matched games; Elo logloss .66116 vs EPA .69455. Challenger rejected; Grade-C reconstruction ineligible for promotion.
 - [x] Weekly immutable analysis/improvement entries implemented and running; partial until week finalized. No automatic model promotion.
 - [x] Season/postseason simulation implemented, tested, running locally; automatic material-evidence refresh and dated history visible. Uncalibrated strength sensitivity explicitly labeled.
-- [x] Full suite 1,136 passed, zero exclusions; focused changed-file Ruff passed. Legacy unchanged lint exception remains accepted.
+- [x] Full suite 1,146 passed, zero exclusions; focused changed-file Ruff passed. Legacy unchanged lint exception remains accepted.
 - [x] Season runtime, scoring and simulations committed/pushed 87cbca9; remote SHA verified.
 - [x] Candidate evaluate-if-changed ledger implemented/tested and local launchd installed; first scheduled run exited 0. Dataset/code/config identity controls immutable experiment reuse.
-- [ ] Recovery source milestone commit/push pending staged path check.
+- [x] Recovery source milestone committed/pushed 6282b6f.
+- [x] Evaluation coverage payload now participates in immutable experiment identity.
+- [x] Official single-game inactives parser implemented/tested: both teams, NFL-only sources, current game/week, source timestamps, correction ordering, January rollover. Actual source cycle verified 2026-09-11 07:35 CDT: 272 games and both published NFL single-game articles; after-kickoff captures never applied retrospectively. Final source delta is included in this milestone.
 - [ ] Full V2 production promotion BLOCKED: challenger underperforms; historical captures cannot establish original PIT availability; no reviewed champion package/registry.
-- [ ] Official inactives parsing BLOCKED: current source adapter archives page but has no verified exhaustive per-game parser. Weather lacks provider issuance time. Neither adjusts Elo probabilities.
+- [ ] Future official inactives remain MISSING until a verified report is published/captured. Unsupported roundup formats fail closed. Weather lacks provider issuance time. Neither input receives an unvalidated Elo adjustment.
 - [ ] Cloud deployment BLOCKED: no persistent private hosting/storage/authentication with verified zero-paid compute allowance. Local Mac must stay awake/online.
 
 ## Verified behavior

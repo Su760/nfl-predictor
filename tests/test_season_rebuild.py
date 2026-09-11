@@ -124,5 +124,12 @@ def test_evaluate_if_changed_reuses_identity_and_invalidates_dataset_or_config(
     assert reused is False and reused_config is False
     assert changed_dataset["experiment"]["signature"] != first["experiment"]["signature"]
     assert changed_config["experiment"]["signature"] != changed_dataset["experiment"]["signature"]
-    assert len(calls) == 3
-    assert len(list((root / "evaluations/records").glob("*.json"))) == 3
+
+    coverage.write_text('{"included_games": 1, "excluded_games": 1}')
+    changed_coverage, reused_coverage = evaluate_if_changed(config, root, b"config-b")
+    assert reused_coverage is False
+    assert changed_coverage["coverage"]["excluded_games"] == 1
+    assert changed_coverage["experiment"]["coverage_sha256"] != changed_config["experiment"]["coverage_sha256"]
+    assert changed_coverage["experiment"]["signature"] != changed_config["experiment"]["signature"]
+    assert len(calls) == 4
+    assert len(list((root / "evaluations/records").glob("*.json"))) == 4

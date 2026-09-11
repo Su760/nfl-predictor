@@ -585,14 +585,18 @@ def _evaluation_code_sha256(config: Mapping[str, Any]) -> str:
 def evaluate_if_changed(
     config: Mapping[str, Any], root: Path, config_payload: bytes
 ) -> tuple[dict[str, Any], bool]:
-    """Create one immutable evaluation for each exact dataset/code/config identity."""
+    """Create one immutable evaluation for each exact dataset/coverage/code/config identity."""
     dataset_path = root / config["dataset_path"]
     dataset_payload = dataset_path.read_bytes()
     dataset_sha256 = hashlib.sha256(dataset_payload).hexdigest()
     _write_once(dataset_path.parent / "objects" / (dataset_sha256 + ".jsonl"), dataset_payload)
+    coverage_payload = (root / config["coverage_path"]).read_bytes()
+    coverage_sha256 = hashlib.sha256(coverage_payload).hexdigest()
+    coverage = json.loads(coverage_payload)
     identity = {
-        "schema_version": "v2-challenger-experiment-v1",
+        "schema_version": "v2-challenger-experiment-v2",
         "dataset_sha256": dataset_sha256,
+        "coverage_sha256": coverage_sha256,
         "evaluation_code_sha256": _evaluation_code_sha256(config),
         "config_sha256": hashlib.sha256(config_payload).hexdigest(),
     }
@@ -613,7 +617,7 @@ def evaluate_if_changed(
         return record, True
     rows = [_row_from_json(line) for line in dataset_payload.splitlines()]
     report = evaluation_report(rows, int(config["holdout_season"]))
-    report["coverage"] = json.loads((root / config["coverage_path"]).read_text())
+    report["coverage"] = coverage
     record = {**report, "experiment": {**identity, "signature": signature}}
     record_payload = json.dumps(record, sort_keys=True, separators=(",", ":"), default=list).encode()
     record_sha = hashlib.sha256(record_payload).hexdigest()

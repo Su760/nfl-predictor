@@ -69,3 +69,17 @@ GitHub Actions is enabled for the public code repository, but no private NFL dat
 or deployed application exists. An unattended private runtime needs persistent private
 storage, an authenticated dashboard and a verified zero-paid-use compute allowance; these
 are not provided by the public code repository. No paid service is enabled as a workaround.
+
+## Verified official inactives
+
+The source adapter discovers NFL single-game news articles from the official inactives page,
+requires both teams and matching game/week, and stores publication, modification and capture
+times. Reports must be published within the configured 72-hour pregame window; future source
+times and postkickoff body modifications are rejected. Newer verified reports take precedence
+over link order. January games retain their NFL season identity. NFL-only curl redirects are
+enforced. Missing/unpublished articles and unsupported roundup formats remain explicit gaps.
+Reports first captured after kickoff cannot enter any earlier forecast. The Elo fallback does
+not apply unsupported injury or inactive probability adjustments.
+
+An end-to-end result regression verifies final → corrected final → retracted → restored final
+across view-cache loss, preserving the exact pregame forecast and all four outcome versions.

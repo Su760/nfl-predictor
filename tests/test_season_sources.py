@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -153,3 +154,102 @@ def test_team_check_marks_missing_participant_without_downgrading_other_games() 
     missing = season_sources._team_check(check, available, ("LA", "SEA"), "missing")
     assert missing == {"status": "MISSING", "reason": "missing"}
     assert check == {"status": "AVAILABLE", "reason": None}
+
+
+def _inactive_game() -> dict:
+    return {
+        "game_id": "game-1",
+        "season": 2026,
+        "week": 1,
+        "away": "SF",
+        "home": "LA",
+        "away_name": "San Francisco 49ers",
+        "home_name": "Los Angeles Rams",
+        "kickoff": "2026-09-11T00:35:00Z",
+    }
+
+
+def _inactive_article(
+    *,
+    description: str = "Official inactives for the Week 1 game: San Francisco 49ers at Los Angeles Rams",
+    published: str = "2026-09-10T23:26:21Z",
+    body: str = "NINERS\n\nQB Player One\n\nRAMS\n\nWR Player Two",
+) -> bytes:
+    value = {
+        "@context": "https://schema.org",
+        "@type": "NewsArticle",
+        "headline": "Game inactives: San Francisco 49ers at Los Angeles Rams",
+        "description": description,
+        "datePublished": published,
+        "articleBody": body,
+    }
+    return ('<script type="application/ld+json">' + json.dumps(value) + "</script>").encode()
+
+
+def test_official_inactive_article_structure_parses_both_teams() -> None:
+    rows, published = season_sources._inactive_article(
+        _inactive_article(), _inactive_game(), "https://www.nfl.com/news/test"
+    )
+    assert {row["team"] for row in rows} == {"SF", "LA"}
+    assert len(rows) == 2
+    assert published == "2026-09-10T23:26:21Z"
+
+
+@pytest.mark.parametrize(
+    ("changes", "error"),
+    [
+        (
+            {"description": "Official 2025 inactives: San Francisco 49ers at Los Angeles Rams"},
+            "SEASON",
+        ),
+        (
+            {
+                "description": "Official inactives for Week 2: San Francisco 49ers at Los Angeles Rams"
+            },
+            "WEEK",
+        ),
+        (
+            {"description": "Official inactives for Week 1: Seattle Seahawks at Los Angeles Rams"},
+            "TEAMS",
+        ),
+        ({"body": "NINERS\n\nQB Player One"}, "SECTIONS"),
+    ],
+)
+def test_inactive_article_rejects_wrong_identity_or_missing_team_section(
+    changes: dict[str, str], error: str
+) -> None:
+    with pytest.raises(ValueError, match=error):
+        season_sources._inactive_article(
+            _inactive_article(**changes), _inactive_game(), "https://www.nfl.com/news/test"
+        )
+
+
+def test_inactives_calendar_rollover_and_stale_article():
+    game = {**_inactive_game(), "week":18, "kickoff":"2027-01-10T18:00:00Z"}
+    body = _inactive_article(description="Official 2026 season Week 18 inactives: San Francisco 49ers at Los Angeles Rams", published="2027-01-10T17:00:00Z")
+    assert season_sources._inactive_article(body,game,"https://www.nfl.com/news/test")[0]
+    with pytest.raises(ValueError, match="NOT_PREGAME"):
+        season_sources._inactive_article(_inactive_article(published="2026-01-10T17:00:00Z"),_inactive_game(),"https://www.nfl.com/news/test")
+
+
+def test_inactives_modified_body_and_future_source_rejected():
+    body = _inactive_article()
+    with pytest.raises(ValueError, match="FROM_FUTURE"):
+        season_sources._inactive_article(body,_inactive_game(),"https://www.nfl.com/news/test",captured_at=datetime(2026,9,10,23,tzinfo=UTC))
+    value = season_sources._news_article(body)
+    value["dateModified"] = "2026-09-11T01:00:00Z"
+    changed = ('<script type="application/ld+json">'+json.dumps(value)+'</script>').encode()
+    with pytest.raises(ValueError, match="NOT_PREGAME"):
+        season_sources._inactive_article(changed,_inactive_game(),"https://www.nfl.com/news/test")
+
+
+def test_official_inactive_links_reject_other_hosts_and_older_report_cannot_replace(tmp_path,monkeypatch):
+    landing = b'<a href="https://github.com/news/game-inactives-wrong"></a><a href="/news/game-inactives-new"></a><a href="/news/game-inactives-old"></a>'
+    links = season_sources._inactive_links(landing,32)
+    assert len(links)==2 and all(url.startswith("https://www.nfl.com/news/") for url in links)
+    def fetch(url,*args):
+        published = "2026-09-10T23:30:00Z" if url.endswith("new") else "2026-09-10T23:20:00Z"
+        return _inactive_article(published=published), {"captured_at":"2026-09-10T23:31:00Z","source_last_modified":None,"raw_sha256":"a"*64}
+    monkeypatch.setattr(season_sources,"_fetch",fetch)
+    matched,_ = season_sources._inactives(landing,{"maximum_inactive_articles":32,"maximum_inactive_publication_age_seconds":259200},tmp_path,lambda:datetime(2026,9,10,23,31,tzinfo=UTC),[_inactive_game()])
+    assert matched["game-1"][1]["source_updated_at"] == "2026-09-10T23:30:00Z"
