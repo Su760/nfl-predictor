@@ -1,0 +1,38 @@
+season = 2026
+history_start = 2016
+history_end = 2025
+minimum_final_games_last_season = 272
+source_url = "https://raw.githubusercontent.com/nflverse/nfldata/master/data/games.csv"
+scoreboard_url = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates=20260901-20270228&limit=1000"
+injuries_url = "https://www.nfl.com/injuries/"
+inactives_url = "https://www.nfl.com/inactives/"
+depth_url = "https://github.com/nflverse/nflverse-data/releases/download/depth_charts/depth_charts_2026.parquet"
+allowed_hosts = ["raw.githubusercontent.com", "site.api.espn.com", "www.nfl.com", "github.com", "release-assets.githubusercontent.com"]
+model_policy = "configs/model_policy_v1.toml"
+model_version = "elo-season-v1"
+model_label = "Season Elo fallback (uncalibrated; finalized results only)"
+data_root = "~/nfl-predictor-live-data/season"
+legacy_data_root = "~/nfl-predictor-live-data"
+maximum_depth_age_seconds = 129600
+maximum_capture_age_seconds = 7200
+request_timeout_seconds = 30
+check_seconds = 7200
+near_game_seconds = 7200
+near_game_check_seconds = 300
+result_poll_hours = 8
+poll_seconds = 60
+slate_days = 8
+origin_window_seconds = 600
+origin_seconds = { T72 = 259200, T60 = 3600, FINAL = 300 }
+zero_dollar_mode = true
+allow_paid_usage = false
+port = 8510
+bind = "127.0.0.1"
+team_aliases = { SD = "LAC", OAK = "LV", STL = "LA", LAR = "LA", WSH = "WAS" }
+
+transport = "curl"
+
+calibration_bin_count = 10
+confident_review_threshold = 0.65
+
+simulation_config = "configs/season_simulation.toml"

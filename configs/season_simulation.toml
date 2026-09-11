@@ -1,0 +1,17 @@
+data_root = "~/nfl-predictor-live-data/season"
+model_policy = "configs/model_policy_v1.toml"
+samples = 2000
+seed = 20260910
+history_start = 2016
+# Uncalibrated sensitivity scale; NOT a fitted posterior or confidence interval.
+rating_sd = 65.0
+
+[divisions]
+AFC_East = ["BUF", "MIA", "NE", "NYJ"]
+AFC_North = ["BAL", "CIN", "CLE", "PIT"]
+AFC_South = ["HOU", "IND", "JAX", "TEN"]
+AFC_West = ["DEN", "KC", "LAC", "LV"]
+NFC_East = ["DAL", "NYG", "PHI", "WAS"]
+NFC_North = ["CHI", "DET", "GB", "MIN"]
+NFC_South = ["ATL", "CAR", "NO", "TB"]
+NFC_West = ["ARI", "LA", "SF", "SEA"]

@@ -42,11 +42,25 @@ history remains visible. New forecasts need a verified future kickoff and source
 Injury/QB/weather captures do not imply supported model adjustments. Missing inputs visible.
 Local uptime limitation persists; launchd stays private. No arbitrary playoff tiebreaks.
 
-## Status
+## Status — 2026-09-11
 - [x] Remote/local fd7e189 confirmed; clean V2 checkout at start.
-- [ ] Audit dependency report; deterministic clock repair.
-- [ ] Season runtime implemented / tested / running locally (record separately).
-- [ ] Scoring policy and dashboard implemented / tested / running locally.
-- [ ] Challenger rebuild/evaluation and weekly improvement loop.
-- [ ] Verified season/postseason simulation.
-- [ ] Reviewed milestone commits pushed; hosting status explicit.
+- [x] Dependency audit and deterministic clock repair committed/pushed 8bb85ed.
+- [x] Season runtime implemented and tested; running locally under season launchd agent.
+- [x] Scoring policy/dashboard implemented and tested; live http://127.0.0.1:8510/.
+- [x] Historical rebuild: 2,593 exact-42 rows; 46 unsupported venue exclusions; all 2015–25 raw captures retained privately.
+- [x] Chronological evaluation: 2025 untouched holdout, 265 matched games; Elo logloss .66116 vs EPA .69455. Challenger rejected; Grade-C reconstruction ineligible for promotion.
+- [x] Weekly immutable analysis/improvement entries implemented and running; partial until week finalized. No automatic model promotion.
+- [x] Season/postseason simulation implemented, tested, running locally; automatic material-evidence refresh and dated history visible. Uncalibrated strength sensitivity explicitly labeled.
+- [x] Full suite 1,136 passed, zero exclusions; focused changed-file Ruff passed. Legacy unchanged lint exception remains accepted.
+- [ ] Commit/push season runtime, scoring, simulations and recovery milestone after staged secret/path check.
+- [ ] Full V2 production promotion BLOCKED: challenger underperforms; historical captures cannot establish original PIT availability; no reviewed champion package/registry.
+- [ ] Official inactives parsing BLOCKED: current source adapter archives page but has no verified exhaustive per-game parser. Weather lacks provider issuance time. Neither adjusts Elo probabilities.
+- [ ] Cloud deployment BLOCKED: no persistent private hosting/storage/authentication with verified zero-paid compute allowance. Local Mac must stay awake/online.
+
+## Verified behavior
+All 272 regular-season games remain in coverage. Current source checks, forecast generation,
+next run and worker health are independent. Source checks every two hours, five-minute near-game
+polling, retained T72/T60/FINAL windows, durable pregame publication, duplicate prevention,
+actual kickoff changes, metadata-only venue changes, outcome corrections/retractions and
+numeric version ordering are tested. Earlier kicked-off games retain retrospective-policy flags.
+Original Week1 Elo forecasts are never relabeled as V2. Paid usage remains zero.
