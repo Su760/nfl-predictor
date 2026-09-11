@@ -2177,8 +2177,23 @@ def test_schedule_flex_keeps_origin_versions_and_resolves_latest_official_event(
 
 
 def test_schedule_flex_uses_newer_obligation_only_event_and_rejects_version_conflict(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    real_stat = Path.stat
+
+    def fixture_receipt_metadata(path: Path, *args: object, **kwargs: object):
+        result = real_stat(path, *args, **kwargs)  # type: ignore[arg-type]
+        if path.parent.name.startswith("forecast-terminal-receipt-"):
+            publication_ns = utc_nanoseconds(NOW - timedelta(days=7))
+            return SimpleNamespace(
+                st_ctime_ns=publication_ns,
+                st_mtime_ns=result.st_mtime_ns,
+                st_nlink=result.st_nlink,
+            )
+        return result
+
+    monkeypatch.setattr(Path, "stat", fixture_receipt_metadata)
     version_one = event()
     version_two = event().model_copy(
         update={

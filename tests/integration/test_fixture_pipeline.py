@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -291,6 +292,20 @@ def test_fixture_source_to_scorecard_chain_never_uses_network(
 
     monkeypatch.setattr(socket, "socket", fail_network)
     monkeypatch.setattr(socket, "getaddrinfo", fail_network)
+    real_stat = Path.stat
+
+    def fixture_receipt_metadata(path: Path, *args: object, **kwargs: object):
+        result = real_stat(path, *args, **kwargs)  # type: ignore[arg-type]
+        if path.parent.name.startswith("forecast-terminal-receipt-"):
+            publication_ns = int((NOW - timedelta(seconds=1)).timestamp() * 1_000_000_000)
+            return SimpleNamespace(
+                st_ctime_ns=publication_ns,
+                st_mtime_ns=result.st_mtime_ns,
+                st_nlink=result.st_nlink,
+            )
+        return result
+
+    monkeypatch.setattr(Path, "stat", fixture_receipt_metadata)
     private_root = tmp_path / "private"
     private_root.mkdir()
     lineage = DurableLineageRepository(private_root / "lineage", private_root)
