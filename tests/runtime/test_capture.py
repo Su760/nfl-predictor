@@ -38,6 +38,7 @@ from nfl_predictor.runtime.capture import (
 from nfl_predictor.runtime.lineage import DurableLineageRepository
 from nfl_predictor.sources.base import BuildIdentity, RawResponse
 from nfl_predictor.sources.nflverse import NflverseAdapter
+from nfl_predictor.storage import DataIntegrityError
 from nfl_predictor.workflows.forecast import (
     ArtifactBinding,
     CaptureBundle,
@@ -590,12 +591,21 @@ def test_repeated_replay_and_post_capture_retry_use_root_source_and_current_batc
         _manifest(capture_id="schedule-source", run_id="archive-source"),
         _manifest(capture_id="pbp-source", run_id="archive-source"),
     )
+    source_payloads = (_ipc(_schedules()), _ipc(_pbp()))
+    archived_manifests = []
+    for manifest, payload in zip(source_manifests, source_payloads, strict=True):
+        relative_path = f"raw/{manifest.capture_id}.arrow"
+        archive = data_root / relative_path
+        archive.parent.mkdir(exist_ok=True)
+        archive.write_bytes(payload)
+        archived_manifests.append(manifest.model_copy(update={
+            "raw_path": relative_path,
+            "raw_payload_sha256": hashlib.sha256(payload).hexdigest(),
+        }))
+    source_manifests = tuple(archived_manifests)
     source_facts = _normalizer().normalize_capture(
-        _ipc(_schedules()),
-        source_manifests[0],
-        _ipc(_pbp()),
-        source_manifests[1],
-        obligation.event,
+        source_payloads[0], source_manifests[0],
+        source_payloads[1], source_manifests[1], obligation.event,
     )
     source_batch = lineage.publish_capture_batch(
         obligation,
@@ -1581,3 +1591,75 @@ def _manifest(*, capture_id: str = "capture-1", run_id: str = "run-1") -> Captur
 
 def _normalizer() -> NflverseFootballNormalizer:
     return NflverseFootballNormalizer(load_feature_policy("configs/feature_policy_v1.toml"))
+
+
+def test_real_optional_capture_requires_one_execution_bound_durable_admission(tmp_path):
+    from nfl_predictor.markets.budget import AppendOnlyBudgetRepository, BudgetExceeded
+    data_root = tmp_path / "private-data"
+    data_root.mkdir()
+    budget_root = data_root / "ledger/budget-reservations/2026-09"
+    budget = OddsBudget(AppendOnlyBudgetRepository(budget_root), 2)
+    adapters = []
+    def factory(_key):
+        adapter = _OddsAdapter(payload=_odds_payload(), events=[])
+        adapters.append(adapter)
+        return adapter
+    def capture(execution):
+        return OptionalOddsCapture(policy=_odds_policy(), api_key="test-key",
+            budget=OddsBudget(AppendOnlyBudgetRepository(budget_root), 2),
+            capture_service=CaptureService(data_root, lambda *_: None, BUILD),
+            adapter_factory=factory, active_events=lambda: (_event(),),
+            month=lambda _: "2026-09",
+            lineage=DurableLineageRepository(data_root / "lineage", data_root),
+            require_admission=True, admission_execution=execution)
+    obligation = _obligation()
+    budget.admit("2026-09", "100:1", obligation.idempotency_key)
+    for stale in (None, "100:2"):
+        with pytest.raises(BudgetExceeded):
+            capture(stale).capture(obligation, "attempt-stale")
+    assert adapters == []
+    capture("100:1").capture(obligation, "attempt-1")
+    assert len(adapters) == 1 and adapters[0].calls == 1
+    assert budget.state("2026-09").consumed_local == 1
+    with pytest.raises(BudgetExceeded):
+        capture("100:1").capture(obligation, "attempt-restarted")
+    assert len(adapters) == 1
+
+
+@pytest.mark.parametrize("damage", ["missing", "tampered", "traversal", "absolute", "symlink"])
+def test_replay_rejects_unverifiable_selected_raw_before_any_append(
+    tmp_path: Path, damage: str
+) -> None:
+    fixture = CaptureFixture(tmp_path)
+    original = fixture.required.capture_live(fixture.obligation, "original")
+    manifests = [row for row in original.records if isinstance(row, CaptureManifest)]
+    raw_path = fixture.data_root / manifests[-1].raw_path
+    if damage == "missing":
+        raw_path.unlink()
+    elif damage == "tampered":
+        raw_path.write_bytes(b"tampered archive")
+    else:
+        outside = tmp_path / "outside-archive.bin"
+        outside.write_bytes(raw_path.read_bytes())
+        if damage == "symlink":
+            raw_path.unlink()
+            raw_path.symlink_to(outside)
+        else:
+            # Publish a later source with unchanged valid bytes but an escaping path.
+            unsafe = str(outside) if damage == "absolute" else "../outside-archive.bin"
+            alternate = tuple(
+                row.model_copy(update={
+                    "capture_id": f"alternate-{index}",
+                    "run_id": "alternate",
+                    "raw_path": unsafe if index == len(manifests) - 1 else row.raw_path,
+                    "response_received_at_utc": row.response_received_at_utc + timedelta(microseconds=1),
+                })
+                for index, row in enumerate(manifests)
+            )
+            fixture.lineage.publish_capture_batch(fixture.obligation, "alternate", alternate, ())
+    marker_root = fixture.lineage.ledger.root / "commits"
+    before = {path: path.read_bytes() for path in marker_root.rglob("*.json")}
+    with pytest.raises(DataIntegrityError) as caught:
+        fixture.required.capture_replay(fixture.obligation, "replay", fixture.cutoff)
+    assert str(tmp_path) not in str(caught.value)
+    assert {path: path.read_bytes() for path in marker_root.rglob("*.json")} == before

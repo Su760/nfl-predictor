@@ -20,12 +20,22 @@ Every prospective run must preserve these invariants:
 2. Resolve exactly one active event version and confirm its origin window is still open.
 3. Print the event, event version, origin, window, public code SHA, and schedule-manifest
    SHA before any capture.
-4. Validate repository, default-branch ref, event type, fixed payload fields, cluster,
-   code SHA, manifest SHA, and an unseen nonce before provider secrets or public checkout.
-5. Reserve the monthly odds budget before a step receives `ODDS_API_KEY`.
-6. Append immutable evidence and validate it before push. Never force-push or rewrite a
+4. Require both trusted `github.actor` and `github.event.sender.login` to exactly match
+   the reviewed allowlist; then validate repository, default-branch ref, event type,
+   fixed fields, cluster, code SHA, manifest SHA, and an unseen nonce.
+5. Commit and push the nonce as the only staged append, with at most one optimistic
+   rebase/retry, before public checkout or any provider-secret step. A push failure is a
+   rejected dispatch.
+6. Independently hash the actual public/private schedule manifests, active-event
+   manifest, and every listed event data file and cross-compare them with config and the
+   dispatch SHA before due computation.
+7. Burn execution-bound odds admission in a separate no-provider-secret job, then
+   fast-forward push before the provider worker starts. Check the admitted data commit
+   and current trusted `github.run_id:github.run_attempt`; fail on a stale rerun token.
+8. Append immutable evidence and validate it before push. Never force-push or rewrite a
    prior forecast, feature snapshot, quote decision, outcome, or settlement.
-7. Never place a wager. Reports use units and do not imply guaranteed profit.
+9. Require UTC year and manifest season `2026`; later-year cron wakeups stop before work.
+10. Never place a wager. Reports use units and do not imply guaranteed profit.
 
 ## Reviewed action pins
 
@@ -50,6 +60,10 @@ public repository's `nameWithOwner` and default branch, then show the proposed p
 Create the private repository only after that confirmation. Copy only
 `deploy/private-data-repo/` into it. Keep it private, keep branch protection enabled, and
 limit Actions to the pinned actions in this template. Do not enable the workflows yet.
+The private checkout must be the absolute sibling `${{ github.workspace }}/data` and the
+reviewed public checkout `${{ github.workspace }}/code`; use
+`${{ github.workspace }}/code/configs/base.toml` as `NFL_V2_RUNTIME_CONFIG`. Never run a
+public CLI from `code` with a relative `data` root.
 
 Create a fine-grained dispatch token with:
 
@@ -62,8 +76,8 @@ Create a fine-grained dispatch token with:
 
 Store it only as `NFL_DATA_REPO_DISPATCH_TOKEN` in the public repository's Actions
 secrets. Store `ODDS_API_KEY` only in the private repository's Actions secrets. Set the
-non-secret repository variables `NFL_PUBLIC_REPOSITORY`, `NFL_DATA_REPO`, and
-`NFL_V2_DEPLOYMENT_ENABLED` only after their exact values are reviewed. Never print a
+non-secret repository variables `NFL_PUBLIC_REPOSITORY`, `NFL_DATA_REPO`,
+`NFL_V2_ARTIFACT_REGISTRY_SHA256`, and `NFL_V2_DEPLOYMENT_ENABLED` only after their exact values are reviewed. Never print a
 token value, pass it as a command argument, or put it in config, a URL, an artifact, or a
 retained log.
 
@@ -79,9 +93,11 @@ uv run nfl-predictor schedule render-dispatch --season 2026 --public-offsets=-8,
 Review every generated UTC target and cron. Public offsets are `(-8,-3,+2,+7)` and
 private offsets are `(-6,-1,+4,+9)`; none may be top-of-hour or outside the ±10-minute
 origin window. Copy the byte-identical manifest to the private config directory, record
-its SHA-256, set the exact approved public commit SHA, set the exact private repository,
-and advance the month lock. A schedule manifest cannot approve itself: its external
-SHA-256 belongs in `data_repo.toml` and the dispatch envelope.
+its SHA-256, record the active-event manifest path/SHA and every file SHA, set the exact
+approved public commit SHA, exact actor allowlist, exact private repository, and advance
+the month lock. A schedule manifest cannot approve itself: its external SHA-256 belongs
+in `data_repo.toml` and the dispatch envelope. The checked public and private bytes,
+config hash, and envelope hash must all agree at runtime.
 
 ## Zero-dollar deployment gate
 
@@ -99,11 +115,32 @@ Compare that total and projected retained storage with the user's freshly verifi
 remaining included private Actions minutes and storage. Record the verification time.
 The planner must reject when projected paid Actions minutes or paid storage is nonzero.
 
-The checked incomplete reference projects 23 rounded minutes and 100 MiB while both
-verified included allowances are zero. That is an intentional enablement blocker, not a
-claim that 23 paid minutes will be used. No job has been run. A billing spend limit,
-runner-class change, storage purchase, or paid API plan is a separate user decision and
-is never implied by changing `deployment_enabled`.
+The checked reference projects 143 billed minutes: eight nonce jobs at one minute,
+sixteen admission jobs at three minutes, eight private and eight public-dispatched
+workers at three minutes each, ten heartbeat jobs at three minutes, a two-minute
+settlement, a one-minute correction and two three-minute retries:
+`8 + 48 + 24 + 24 + 30 + 2 + 1 + 6 = 143`. These durations are conservative planning
+assumptions and must be verified before deployment; they are not measured guarantees.
+Private due ticks do full environment restoration and worker work. The two target+5
+cron ticks run heartbeat only; all eight private backup ticks also run that
+check. Both original public/private due offset sets remain unchanged.
+
+The odds projection is two origins × two admitted attempts per active event, plus two
+configured schedule-change calls for this one-event reference (six credits). The actual
+limiter reads the private hard stop and never exceeds the public policy cap or 400.
+`per_origin_admission_attempts = 2` is the frozen maximum across every trigger and
+rerun. Reservations are charged before the admission push, so even two lost runners
+consume only two admissions for that obligation. Later workers continue football-only.
+Retained storage is projected at 100 MiB. Both included allowances remain zero, so
+all of these figures remain explicit enablement blockers. Verify the deployed file:
+
+```text
+uv run python -m nfl_predictor.cli odds budget-plan --season 2026 --private-config /absolute/path/to/data/config/data_repo.toml
+```
+
+An enabled config exits nonzero for any cost, request-cap, hash, or schedule blocker. A
+billing spend limit, runner-class change, storage purchase, or paid API plan is a
+separate user decision and is never implied by changing `deployment_enabled`.
 
 Only after the active schedule, exact repositories/SHA, zero-paid-use projection, local
 tests, and explicit enablement approval all pass may both config and manifest be changed
@@ -124,6 +161,13 @@ At the start of each football month:
    redundant in-window ticks.
 5. Confirm the last completed origin has an immutable terminal record and that duplicate
    trigger paths converged on it.
+6. Schedule a heartbeat at target+5 and recheck on later private ticks.
+   It scans all verified active obligations whose target+5 has elapsed, including
+   missing runs and expired windows; it never infers completion from process exit.
+   `FAILED`/`MISSED` are failures and `COMPLETE`/`FOOTBALL_ONLY` are success.
+   Store only event, origin, status and code SHA under a stable event/origin/policy
+   identity. Missing/failed observations map to one safe deduplicated issue. GitHub
+   scheduler delay or dropped runs can prevent timely alert delivery.
 
 After each run, inspect only the compact safe summary: event, version, origin, run ID,
 status, reason code, code SHA, and safe log link. Do not expose raw provider credentials,
@@ -142,7 +186,9 @@ The preview must print the active event ID and version, origin, target, open/clo
 code SHA, manifest SHA, and `due` state. Verify them against the private config and
 official schedule. Abort if the event is absent, the version is stale, the SHA differs,
 the clock is outside the window, or the preview does not refuse an expired run. Never
-add `--mode replay` to a prospective recovery.
+add `--mode replay` to a prospective recovery. Manual workflow time must match strict
+`YYYY-MM-DDTHH:MM:SSZ`; offsets such as `+00:00`, fractional seconds, whitespace, and
+multiline values are rejected before any secret step and never reach `$GITHUB_ENV`.
 
 For a local approved recovery, invoke the same idempotent boundary with the real current
 UTC value and explicit event/origin:
@@ -169,16 +215,21 @@ forecast. A TBD event remains excluded.
 
 ### HTTP 429 or provider outage
 
-Honor provider retry guidance and bounded exponential backoff only while the origin
-window remains open. Optional close/reference calls yield to required origin calls. If
+Provider work has a 15-minute job timeout and at most two attempts separated by the
+fixed five-second reviewed delay, only while the origin window remains open. If an
+attempt changes the odds reservation/usage bytes, treat it as potentially consumed and
+do not retry. Optional close/reference calls yield to required origin calls. If
 odds are unavailable or quota is exhausted, retain the football forecast with
 `FOOTBALL_ONLY` and no odds-based decision. If required football capture cannot finish
-before close, append a safe failure or missed record; never reconstruct a Grade A
-forecast later and never spend an unapproved credit.
+before close, append the safe target+5 failure/missed heartbeat and update the single
+event/origin alert; never reconstruct a Grade A forecast later and never spend an
+unapproved credit.
 
 ### Duplicate dispatch
 
-An identical nonce is rejected before checkout or secrets. A distinct nonce for the same
+An identical nonce is rejected before checkout or secrets. Admission is not complete
+until that nonce is durably committed and pushed; the only conflict recovery is one
+fetch, duplicate check, rebase, and retry. A distinct nonce for the same
 event/version/origin reaches the same transactional idempotency key and must return the
 single immutable terminal result. Investigate repeated distinct nonces, preserve safe
 run IDs, and rotate the dispatch token if unauthorized activity is suspected. Do not
@@ -230,3 +281,48 @@ completed in-window.
 At season end, disable all schedules, revoke the dispatch token and odds key, reconcile
 final Actions/storage/provider usage, retain immutable evidence according to provider
 terms, and archive the year-specific cron manifests so they cannot recur in a later year.
+
+## Durable admission and receipt acceptance status
+
+Budget transactions append hash-chained immutable JSON snapshots under
+`ledger/budget-reservations/<month>/`. A kernel directory lock serializes local
+transactions and automatically releases on process exit. Admission charges credits
+before provider access, then pushes its commit as a fast-forward compare-and-swap.
+A failed push exports no permission to the worker; never rebase a stale budget snapshot.
+Recompute against a fresh private checkout on a new authorized execution instead.
+
+Workers check out the exact admitted data SHA and compare the admitted execution with
+current trusted `github.run_id:github.run_attempt`. Rerunning only a failed worker
+cannot reuse an older admission. An immutable local claim blocks duplicate sends;
+crashes leave the pre-pushed credit spent. Provider headers can increase conservative
+consumption once; absent or uncertain responses never refund it. Each attempt refreshes
+the real UTC clock and stops if the origin window has closed.
+
+Immutable `terminal-publication-v1` evidence binds the execution key, run and receipt
+hashes, and original publication/post-fsync UTC observations. Original publication
+deadline checks precede proof creation; restoring historical proof is not a new
+publication. Legacy or interrupted receipts without valid proof remain unverified;
+never manufacture proof from checkout metadata. The offline Git-restore and heartbeat
+probe passes. Overall Task 5/deployment acceptance remains blocked by two existing
+outcomes regression assertions that require post-publication metadata changes to
+invalidate valid proof; test-only reconciliation awaits scope approval. All other
+readiness and allowance gates still apply.
+
+### Reviewed writer serialization and quota reconciliation
+
+The nonce validation job exports its pushed private commit SHA; public budget admission
+starts from that exact commit. Detached provider workers publish with an explicit
+`HEAD:refs/heads/<private-default-branch>` fast-forward refspec. Budget transactions are
+never rebased. Capture, private due and settlement workflows share one private-writer
+concurrency group. The heartbeat job depends on admission and the provider with an
+`always()` deployment gate, then checks out and validates the latest explicit private
+branch. It still observes failed or skipped workers without racing their commits;
+serialization and scheduler delay may postpone the target+5 observation.
+
+Authoritative provider usage is reconciled with the additional cost of outstanding
+prepaid admissions. A reported usage increase can therefore block an already admitted
+but unattempted request. Claim authorization and the local claim append share the budget
+transaction lock. Only current-execution claims suppress provider retries. The explicit
+private budget CLI hashes real active-event manifest/data bytes and shares actual-event
+request/job derivation with runtime planning; missing bytes, understated requests and
+omitted jobs block deployment and cause a nonzero CLI exit.

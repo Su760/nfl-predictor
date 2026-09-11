@@ -1,244 +1,676 @@
 name: Private redundant NFL due check
-
-on:
-  schedule:
-    - cron: "14 0 7 9 *"
-    - cron: "19 0 7 9 *"
-    - cron: "24 0 7 9 *"
-    - cron: "29 0 7 9 *"
-    - cron: "14 23 9 9 *"
-    - cron: "19 23 9 9 *"
-    - cron: "24 23 9 9 *"
-    - cron: "29 23 9 9 *"
-  workflow_dispatch:
-    inputs:
-      at:
-        description: Current UTC timestamp for an in-window recovery
-        required: true
-        type: string
-
 permissions:
   contents: write
-
+  issues: write
 concurrency:
   group: nfl-odds-budget-2026-09
   cancel-in-progress: false
-
 jobs:
-  private-due:
-    if: ${{ vars.NFL_V2_DEPLOYMENT_ENABLED == 'true' }}
+  admit-budget:
+    if: ${{ vars.NFL_V2_DEPLOYMENT_ENABLED == 'true' && github.event.schedule != '25 0 7 9 *' && github.event.schedule
+      != '25 23 9 9 *' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      NFL_PREDICTOR_DATA_DIR: data
+      NFL_PREDICTOR_DATA_DIR: ${{ github.workspace }}/data
+      NFL_V2_RUNTIME_CONFIG: ${{ github.workspace }}/code/configs/base.toml
+      NFL_PRIVATE_CONFIG: ${{ github.workspace }}/data/config/data_repo.toml
+      NFL_PUBLIC_DISPATCH_MANIFEST: ${{ github.workspace }}/code/deploy/schedules/dispatch-windows-2026.json
+      FORECAST_PLAN_PATH: ${{ github.workspace }}/forecast-plan.json
+      PROVIDER_MAX_ATTEMPTS: '2'
+      RETRY_BACKOFF_SECONDS: '5'
+      NFL_V2_ARTIFACT_REGISTRY_SHA256: ${{ vars.NFL_V2_ARTIFACT_REGISTRY_SHA256 }}
+      CURRENT_EXECUTION: ${{ github.run_id }}:${{ github.run_attempt }}
+      PRIVATE_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
     steps:
-      - name: Check out private ledger
-        # actions/checkout v7.0.1
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          path: data
-      - name: Freeze UTC scheduler clock
-        shell: bash
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          REQUESTED_AT: ${{ inputs.at }}
-        run: |
-          run_started_at_utc="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-          run_at_utc="$run_started_at_utc"
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            run_at_utc="$REQUESTED_AT"
+    - name: Check out private ledger
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        path: data
+        ref: refs/heads/${{ github.event.repository.default_branch }}
+    - name: Freeze UTC scheduler clock
+      id: clock
+      shell: bash
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        REQUESTED_AT: ${{ inputs.at }}
+      run: |
+        python - <<'PY'
+        import os
+        import re
+        import secrets
+        from datetime import UTC, datetime
+        from pathlib import Path
+
+        started = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        requested = os.environ.get("REQUESTED_AT", "")
+        if os.environ["EVENT_NAME"] == "workflow_dispatch":
+            if re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", requested) is None:
+                raise SystemExit("manual at must use YYYY-MM-DDTHH:MM:SSZ")
+            try:
+                datetime.strptime(requested, "%Y-%m-%dT%H:%M:%SZ")
+            except ValueError as error:
+                raise SystemExit("manual at must be a real UTC timestamp") from error
+            run_at = requested
+        elif os.environ["EVENT_NAME"] == "schedule":
+            run_at = started
+        else:
+            raise SystemExit("workflow trigger is not allowed")
+        with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+            for key, value in (("run_started_at_utc", started), ("run_at_utc", run_at)):
+                delimiter = "NFL_" + secrets.token_hex(16)
+                output.write(f"{key}<<{delimiter}\n{value}\n{delimiter}\n")
+        PY
+    - name: Enforce private 2026 UTC year lock
+      shell: bash
+      env:
+        RUN_AT_UTC: ${{ steps.clock.outputs.run_at_utc }}
+      run: test "${RUN_AT_UTC:0:4}" = "2026"
+    - name: Validate private due configuration
+      id: config
+      shell: bash
+      env:
+        CURRENT_REPOSITORY: ${{ github.repository }}
+        CONFIGURED_PUBLIC_REPOSITORY: ${{ vars.NFL_PUBLIC_REPOSITORY }}
+        RUN_STARTED_AT_UTC: ${{ steps.clock.outputs.run_started_at_utc }}
+      run: |
+        python - <<'PY'
+        import hashlib
+        import json
+        import os
+        import re
+        import tomllib
+        from pathlib import Path
+
+        root = Path(os.environ["NFL_PREDICTOR_DATA_DIR"]).resolve(strict=True)
+        config = tomllib.loads(Path(os.environ["NFL_PRIVATE_CONFIG"]).read_text())
+        private_path = (root / config["schedule"]["manifest_path"]).resolve(strict=True)
+        private_path.relative_to(root)
+        raw = private_path.read_bytes()
+        manifest = json.loads(raw)
+        schedule_sha = hashlib.sha256(raw).hexdigest()
+        if config.get("season") != 2026 or manifest.get("season") != 2026:
+            raise SystemExit("schedule is outside the 2026 season lock")
+        if not config["deployment_enabled"] or not manifest.get("deployment_enabled"):
+            raise SystemExit("deployment is disabled")
+        if config["authorization"]["target_private_repository"] != os.environ["CURRENT_REPOSITORY"]:
+            raise SystemExit("private repository is not the authorized target")
+        if config["authorization"]["source_public_repository"] != os.environ["CONFIGURED_PUBLIC_REPOSITORY"]:
+            raise SystemExit("configured public repository is not authorized")
+        if schedule_sha != config["schedule"]["manifest_sha256"]:
+            raise SystemExit("private schedule manifest hash mismatch")
+        if not config["schedule"]["generated_from_active_event_versions"] or not manifest.get("generated_from_active_event_versions"):
+            raise SystemExit("active event-version schedule is absent")
+        if os.environ["RUN_STARTED_AT_UTC"][:7] != config["month_lock"]:
+            raise SystemExit("workflow month is outside the reviewed month lock")
+        code_sha = config["authorization"]["approved_public_code_sha"]
+        if not re.fullmatch(r"[0-9a-f]{40}", code_sha):
+            raise SystemExit("approved public code SHA is absent or malformed")
+        with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+            output.write("code_sha=" + code_sha + "\n")
+            output.write("schedule_sha=" + schedule_sha + "\n")
+        PY
+    - name: Check out exact approved public SHA
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        repository: ${{ vars.NFL_PUBLIC_REPOSITORY }}
+        ref: ${{ steps.config.outputs.code_sha }}
+        path: code
+        persist-credentials: false
+    - name: Install locked Python 3.11
+      uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+      with:
+        python-version: '3.11'
+        enable-cache: false
+    - name: Restore frozen public environment
+      working-directory: code
+      shell: bash
+      run: uv sync --frozen
+    - name: Verify public/private/active schedule bytes
+      shell: bash
+      env:
+        EXPECTED_SCHEDULE_SHA: ${{ steps.config.outputs.schedule_sha }}
+      run: |
+        python - <<'PY'
+        import hashlib
+        import json
+        import os
+        import re
+        import tomllib
+        from pathlib import Path
+
+        data_root = Path(os.environ["NFL_PREDICTOR_DATA_DIR"]).resolve(strict=True)
+        config = tomllib.loads(Path(os.environ["NFL_PRIVATE_CONFIG"]).read_text())
+        public_raw = Path(os.environ["NFL_PUBLIC_DISPATCH_MANIFEST"]).resolve(strict=True).read_bytes()
+        private_path = (data_root / config["schedule"]["manifest_path"]).resolve(strict=True)
+        private_path.relative_to(data_root)
+        private_raw = private_path.read_bytes()
+        public_sha = hashlib.sha256(public_raw).hexdigest()
+        private_sha = hashlib.sha256(private_raw).hexdigest()
+        if not (public_sha == private_sha == os.environ["EXPECTED_SCHEDULE_SHA"] == config["schedule"]["manifest_sha256"]):
+            raise SystemExit("public/private dispatch schedule bytes are not cross-bound")
+        manifests = (json.loads(public_raw), json.loads(private_raw))
+        for manifest in manifests:
+            if manifest.get("season") != 2026 or config.get("season") != 2026:
+                raise SystemExit("schedule is outside the 2026 season lock")
+            if not manifest.get("deployment_enabled") or not manifest.get("generated_from_active_event_versions"):
+                raise SystemExit("schedule is not an enabled active-event derivation")
+        active_path = (data_root / config["schedule"]["active_event_version_manifest_path"]).resolve(strict=True)
+        active_path.relative_to(data_root)
+        active_raw = active_path.read_bytes()
+        active_sha = hashlib.sha256(active_raw).hexdigest()
+        if not re.fullmatch(r"[0-9a-f]{64}", active_sha) or not (active_sha == config["schedule"]["active_event_version_manifest_sha256"] == manifests[0]["active_event_version_manifest_sha256"] == manifests[1]["active_event_version_manifest_sha256"]):
+            raise SystemExit("active-event manifest bytes are not cross-bound")
+        active_manifest = json.loads(active_raw)
+        if active_manifest.get("season") != 2026 or not isinstance(active_manifest.get("files"), list):
+            raise SystemExit("active-event manifest is outside the 2026 season lock")
+        for record in active_manifest["files"]:
+            relative = Path(record["path"])
+            if relative.is_absolute() or ".." in relative.parts: raise SystemExit("active-event data path is unsafe")
+            data_path = (data_root / relative).resolve(strict=True)
+            data_path.relative_to(data_root)
+            if hashlib.sha256(data_path.read_bytes()).hexdigest() != record["sha256"]: raise SystemExit("active-event data byte hash mismatch")
+        PY
+    - name: Reserve monthly odds budget
+      working-directory: code
+      shell: bash
+      run: |
+        uv run python - <<'PYCODE'
+        import os
+        from datetime import UTC, datetime
+        from pathlib import Path
+        from nfl_predictor.runtime import build_production_runtime
+        runtime = build_production_runtime(Path(os.environ["NFL_V2_RUNTIME_CONFIG"]), os.environ, lambda: datetime.now(UTC))
+        components = runtime.services.forecast_run.__self__
+        from nfl_predictor.workflows.forecast import ForecastExecutionContext
+        now = datetime.now(UTC)
+        if not components.readiness_check(context=ForecastExecutionContext.live(now))["ready"]:
+            raise SystemExit("runtime readiness is blocked")
+        components.admit_due_odds(os.environ["CURRENT_EXECUTION"], now,
+            event_id=os.environ.get("RECOVERY_EVENT_ID") or None,
+            selected_origin=os.environ.get("RECOVERY_ORIGIN") or None)
+        PYCODE
+    - name: Validate immutable admission
+      shell: bash
+      run: |
+        PYTHONPATH="${PYTHONPATH:+${PYTHONPATH}:}code/src" python - <<'PY'
+        from pathlib import Path
+        from nfl_predictor.workflows.dispatch import validate_immutable_append
+        validate_immutable_append(Path("data"))
+        PY
+    - name: Persist execution-bound odds admission
+      shell: bash
+      run: |
+        git -C data config user.name "nfl-v2-automation"
+        git -C data config user.email "nfl-v2-automation@users.noreply.github.com"
+        for append_root in ledger raw reports lineage forecast outcomes-and-reports; do
+          if [ -e "data/${append_root}" ]; then git -C data add -- "$append_root"; fi
+        done
+        git -C data diff --cached --check
+        if ! git -C data diff --cached --quiet; then
+          git -C data commit -m "data: burn execution-bound odds admission"
+        fi
+        # Fast-forward push is the remote CAS. Never rebase a stale budget transaction.
+        git -C data push origin "HEAD:${PRIVATE_DEFAULT_BRANCH}"
+        printf 'admitted=true\n' >> "$GITHUB_OUTPUT"
+        printf 'execution=%s\n' "$CURRENT_EXECUTION" >> "$GITHUB_OUTPUT"
+        printf 'data_sha=%s\n' "$(git -C data rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      id: admission
+    outputs:
+      admitted: ${{ steps.admission.outputs.admitted }}
+      execution: ${{ steps.admission.outputs.execution }}
+      data_sha: ${{ steps.admission.outputs.data_sha }}
+      code_sha: ${{ steps.config.outputs.code_sha }}
+      schedule_sha: ${{ steps.config.outputs.schedule_sha }}
+      run_at_utc: ${{ steps.clock.outputs.run_at_utc }}
+  private-due:
+    if: ${{ needs.admit-budget.outputs.admitted == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NFL_PREDICTOR_DATA_DIR: ${{ github.workspace }}/data
+      NFL_V2_RUNTIME_CONFIG: ${{ github.workspace }}/code/configs/base.toml
+      NFL_PRIVATE_CONFIG: ${{ github.workspace }}/data/config/data_repo.toml
+      NFL_PUBLIC_DISPATCH_MANIFEST: ${{ github.workspace }}/code/deploy/schedules/dispatch-windows-2026.json
+      FORECAST_PLAN_PATH: ${{ github.workspace }}/forecast-plan.json
+      PROVIDER_MAX_ATTEMPTS: '2'
+      RETRY_BACKOFF_SECONDS: '5'
+      NFL_V2_ARTIFACT_REGISTRY_SHA256: ${{ vars.NFL_V2_ARTIFACT_REGISTRY_SHA256 }}
+      NFL_ODDS_ADMISSION_EXECUTION: ${{ github.run_id }}:${{ github.run_attempt }}
+      CURRENT_EXECUTION: ${{ github.run_id }}:${{ github.run_attempt }}
+      ADMITTED_EXECUTION: ${{ needs.admit-budget.outputs.execution }}
+      ADMITTED_SHA: ${{ needs.admit-budget.outputs.data_sha }}
+      RUN_AT_UTC: ${{ needs.admit-budget.outputs.run_at_utc }}
+      CODE_SHA: ${{ needs.admit-budget.outputs.code_sha }}
+      EXPECTED_SCHEDULE_SHA: ${{ needs.admit-budget.outputs.schedule_sha }}
+      PRIVATE_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+    steps:
+    - name: Check out private ledger
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        path: data
+        ref: ${{ needs.admit-budget.outputs.data_sha }}
+    - name: Verify current admission execution
+      shell: bash
+      run: |
+        test "$ADMITTED_EXECUTION" = "$CURRENT_EXECUTION"
+        test "$(git -C data rev-parse HEAD)" = "$ADMITTED_SHA"
+    - name: Check out exact approved public SHA
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        repository: ${{ vars.NFL_PUBLIC_REPOSITORY }}
+        ref: ${{ needs.admit-budget.outputs.code_sha }}
+        path: code
+        persist-credentials: false
+    - name: Install locked Python 3.11
+      uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+      with:
+        python-version: '3.11'
+        enable-cache: false
+    - name: Restore frozen public environment
+      working-directory: code
+      shell: bash
+      run: uv sync --frozen
+    - name: Verify public/private/active schedule bytes
+      shell: bash
+      env:
+        EXPECTED_SCHEDULE_SHA: ${{ needs.admit-budget.outputs.schedule_sha }}
+      run: |
+        python - <<'PY'
+        import hashlib
+        import json
+        import os
+        import re
+        import tomllib
+        from pathlib import Path
+
+        data_root = Path(os.environ["NFL_PREDICTOR_DATA_DIR"]).resolve(strict=True)
+        config = tomllib.loads(Path(os.environ["NFL_PRIVATE_CONFIG"]).read_text())
+        public_raw = Path(os.environ["NFL_PUBLIC_DISPATCH_MANIFEST"]).resolve(strict=True).read_bytes()
+        private_path = (data_root / config["schedule"]["manifest_path"]).resolve(strict=True)
+        private_path.relative_to(data_root)
+        private_raw = private_path.read_bytes()
+        public_sha = hashlib.sha256(public_raw).hexdigest()
+        private_sha = hashlib.sha256(private_raw).hexdigest()
+        if not (public_sha == private_sha == os.environ["EXPECTED_SCHEDULE_SHA"] == config["schedule"]["manifest_sha256"]):
+            raise SystemExit("public/private dispatch schedule bytes are not cross-bound")
+        manifests = (json.loads(public_raw), json.loads(private_raw))
+        for manifest in manifests:
+            if manifest.get("season") != 2026 or config.get("season") != 2026:
+                raise SystemExit("schedule is outside the 2026 season lock")
+            if not manifest.get("deployment_enabled") or not manifest.get("generated_from_active_event_versions"):
+                raise SystemExit("schedule is not an enabled active-event derivation")
+        active_path = (data_root / config["schedule"]["active_event_version_manifest_path"]).resolve(strict=True)
+        active_path.relative_to(data_root)
+        active_raw = active_path.read_bytes()
+        active_sha = hashlib.sha256(active_raw).hexdigest()
+        if not re.fullmatch(r"[0-9a-f]{64}", active_sha) or not (active_sha == config["schedule"]["active_event_version_manifest_sha256"] == manifests[0]["active_event_version_manifest_sha256"] == manifests[1]["active_event_version_manifest_sha256"]):
+            raise SystemExit("active-event manifest bytes are not cross-bound")
+        active_manifest = json.loads(active_raw)
+        if active_manifest.get("season") != 2026 or not isinstance(active_manifest.get("files"), list):
+            raise SystemExit("active-event manifest is outside the 2026 season lock")
+        for record in active_manifest["files"]:
+            relative = Path(record["path"])
+            if relative.is_absolute() or ".." in relative.parts: raise SystemExit("active-event data path is unsafe")
+            data_path = (data_root / relative).resolve(strict=True)
+            data_path.relative_to(data_root)
+            if hashlib.sha256(data_path.read_bytes()).hexdigest() != record["sha256"]: raise SystemExit("active-event data byte hash mismatch")
+        PY
+    - name: Run idempotent private due forecast
+      id: provider
+      continue-on-error: true
+      working-directory: code
+      shell: bash
+      env:
+        ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+      run: |
+        echo "::add-mask::${ODDS_API_KEY}"
+        for ((attempt=1; attempt<=PROVIDER_MAX_ATTEMPTS; attempt++)); do
+          # Refresh real time before every attempt; never reuse the admission/planning clock.
+          current_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+          uv run python -m nfl_predictor.cli forecast due --at "$current_at" --trigger private_schedule --dry-run > "$FORECAST_PLAN_PATH"
+          python - <<'PYCODE'
+        import json, os
+        from datetime import UTC, datetime, timedelta
+        from pathlib import Path
+        plan = json.loads(Path(os.environ["FORECAST_PLAN_PATH"]).read_text())
+        now = datetime.now(UTC)
+        clusters = plan.get("clusters", [])
+        if not clusters or not all(abs(now-datetime.fromisoformat(c["target_at_utc"].replace("Z", "+00:00"))) <= timedelta(minutes=10) for c in clusters):
+            raise SystemExit("origin window closed before provider retry")
+        PYCODE
+          set +e
+          if [ "${TRIGGER_KIND:-}" = "workflow_dispatch" ] && [ -n "${RECOVERY_EVENT_ID:-}" ]; then
+            uv run python -m nfl_predictor.cli forecast run --event "$RECOVERY_EVENT_ID" --origin "$RECOVERY_ORIGIN" --at "$current_at" --trigger manual
+          else
+            uv run python -m nfl_predictor.cli forecast due --at "$current_at" --trigger private_schedule
           fi
-          printf 'RUN_STARTED_AT_UTC=%s\n' "$run_started_at_utc" >> "$GITHUB_ENV"
-          printf 'RUN_AT_UTC=%s\n' "$run_at_utc" >> "$GITHUB_ENV"
-      - name: Validate private due configuration
-        id: config
-        shell: bash
-        env:
-          CURRENT_REPOSITORY: ${{ github.repository }}
-          CONFIGURED_PUBLIC_REPOSITORY: ${{ vars.NFL_PUBLIC_REPOSITORY }}
-        run: |
-          python - <<'PY'
-          import hashlib
-          import json
-          import os
-          import re
-          import tomllib
-          from pathlib import Path
-
-          root = Path("data")
-          config = tomllib.loads((root / "config/data_repo.toml").read_text())
-          manifest_path = root / config["schedule"]["manifest_path"]
-          manifest_raw = manifest_path.read_bytes()
-          manifest = json.loads(manifest_raw)
-          manifest_sha = hashlib.sha256(manifest_raw).hexdigest()
-          if not config["deployment_enabled"] or not manifest["deployment_enabled"]:
-              raise SystemExit("deployment is disabled")
-          if config["authorization"]["target_private_repository"] != os.environ["CURRENT_REPOSITORY"]:
-              raise SystemExit("private repository is not the authorized target")
-          if config["authorization"]["source_public_repository"] != os.environ["CONFIGURED_PUBLIC_REPOSITORY"]:
-              raise SystemExit("configured public repository is not authorized")
-          if manifest_sha != config["schedule"]["manifest_sha256"]:
-              raise SystemExit("schedule manifest hash mismatch")
-          if (
-              not config["schedule"]["generated_from_active_event_versions"]
-              or not manifest["generated_from_active_event_versions"]
-          ):
-              raise SystemExit("active event-version schedule is absent")
-          if not config["schedule"]["active_event_version_manifest_sha256"]:
-              raise SystemExit("active event-version manifest hash is absent")
-          if (
-              manifest["active_event_version_manifest_sha256"]
-              != config["schedule"]["active_event_version_manifest_sha256"]
-          ):
-              raise SystemExit("active event-version manifest hash mismatch")
-          if os.environ["RUN_STARTED_AT_UTC"][:7] != config["month_lock"]:
-              raise SystemExit("workflow month is outside the reviewed month lock")
-          code_sha = config["authorization"]["approved_public_code_sha"]
-          if not re.fullmatch(r"[0-9a-f]{40}", code_sha):
-              raise SystemExit("approved public code SHA is absent or malformed")
-          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
-              output.write("code_sha=" + code_sha + "\n")
-          PY
-      - name: Check out exact approved public SHA
-        # actions/checkout v7.0.1
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          repository: ${{ vars.NFL_PUBLIC_REPOSITORY }}
-          ref: ${{ steps.config.outputs.code_sha }}
-          path: code
-          persist-credentials: false
-      - name: Install locked Python 3.11
-        # astral-sh/setup-uv v8.1.0
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
-        with:
-          python-version: "3.11"
-          enable-cache: false
-      - name: Restore frozen public environment
-        working-directory: code
-        shell: bash
-        run: uv sync --frozen
-      - name: Run readiness gate
-        working-directory: code
-        shell: bash
-        run: uv run python -m nfl_predictor.cli readiness check --as-of "$RUN_AT_UTC"
-      - name: Reserve monthly odds budget
-        working-directory: code
-        shell: bash
-        run: |
-          python - <<'PY'
-          import json
-          import os
-          import tomllib
-          from pathlib import Path
-
-          config = tomllib.loads(Path("../data/config/data_repo.toml").read_text())
-          projection = config["cost_projection"]
-          job_fields = (
-              ("private_due_ticks", "private_due_seconds_each"),
-              ("full_forecast_workers", "full_forecast_seconds_each"),
-              ("settlement_jobs", "settlement_seconds_each"),
-              ("correction_jobs", "correction_seconds_each"),
-              ("retry_allowance", "retry_seconds_each"),
-          )
-          billed_minutes = sum(
-              projection[count] * ((projection[seconds] + 59) // 60)
-              for count, seconds in job_fields
-          )
-          paid_actions = max(
-              0,
-              billed_minutes - projection["verified_included_private_actions_minutes"],
-          )
-          paid_storage = max(
-              0,
-              projection["projected_storage_bytes"]
-              - projection["verified_included_storage_bytes"],
-          )
-          if billed_minutes != projection["projected_github_billed_minutes"]:
-              raise SystemExit("stored Actions projection does not match per-job rounding")
-          if paid_actions != projection["projected_paid_actions_minutes"]:
-              raise SystemExit("stored paid Actions projection is inconsistent")
-          if paid_storage != projection["projected_paid_storage_bytes"]:
-              raise SystemExit("stored paid storage projection is inconsistent")
-          if paid_actions != 0:
-              raise SystemExit("projected paid Actions usage is nonzero")
-          if paid_storage != 0:
-              raise SystemExit("projected paid storage is nonzero")
-          root = Path("../data") / config["ledger"]["budget_reservation_directory"]
-          root.mkdir(parents=True, exist_ok=True)
-          destination = root / ("private-" + os.environ["GITHUB_RUN_ID"] + ".json")
-          descriptor = os.open(destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-          with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-              json.dump(
-                  {"month": config["month_lock"], "run_id": os.environ["GITHUB_RUN_ID"]},
-                  handle,
-                  sort_keys=True,
-              )
-              handle.write("\n")
-          PY
-          uv run python -m nfl_predictor.cli odds budget-plan --season 2026
-      - name: Run idempotent private due forecast
-        working-directory: code
-        shell: bash
-        env:
-          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
-        run: |
-          echo "::add-mask::${ODDS_API_KEY}"
-          uv run python -m nfl_predictor.cli forecast due \
-            --at "$RUN_AT_UTC" --trigger private_schedule
-      - name: Scan ledger for secret leakage
-        shell: bash
-        run: |
-          python - <<'PY'
-          import re
-          from pathlib import Path
-
-          patterns = (
-              re.compile(rb"ODDS_API_KEY\s*[:=]"),
-              re.compile(rb"(?:github_pat_|ghp_)[A-Za-z0-9_]{20,}"),
-              re.compile(rb"api[_-]?key\s*[:=]\s*[A-Za-z0-9_-]{16,}", re.IGNORECASE),
-          )
-          for root_name in ("ledger", "raw", "reports"):
-              root = Path("data") / root_name
-              if not root.exists():
-                  continue
-              for path in root.rglob("*"):
-                  if path.is_file() and any(
-                      pattern.search(path.read_bytes()) for pattern in patterns
-                  ):
-                      raise SystemExit("possible secret material in " + str(path))
-          PY
-      - name: Validate immutable ledger
-        shell: bash
-        run: |
-          git -C data diff --check
-          if git -C data diff --name-only --diff-filter=DM | grep -q .; then
-            echo "existing immutable file changed or deleted" >&2
-            exit 1
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then exit 0; fi
+          # An attempted token remains spent on crashes; a process retry cannot claim it again.
+          claim_state="$(PYTHONPATH="${PYTHONPATH:+${PYTHONPATH}:}src" python - <<'PYCLAIM'
+        import os
+        from pathlib import Path
+        from nfl_predictor.markets.budget import has_execution_claims
+        print("claimed" if has_execution_claims(
+            Path(os.environ["NFL_PREDICTOR_DATA_DIR"]) / "ledger/budget-reservations",
+            os.environ["CURRENT_EXECUTION"]) else "unused")
+        PYCLAIM
+        )"
+          if [ "$claim_state" = "claimed" ]; then
+            exit "$status"
           fi
-          python - <<'PY'
-          import subprocess
+          if [ "$attempt" -lt "$PROVIDER_MAX_ATTEMPTS" ]; then sleep "$RETRY_BACKOFF_SECONDS"; fi
+        done
+        exit "$status"
+    - name: Scan ledger for secret leakage
+      id: leak_scan
+      if: always()
+      shell: bash
+      run: |
+        python - <<'PY'
+        import re
+        from pathlib import Path
+        patterns = (re.compile(rb"ODDS_API_KEY\s*[:=]"), re.compile(rb"(?:github_pat_|ghp_)[A-Za-z0-9_]{20,}"), re.compile(rb"api[_-]?key\s*[:=]\s*[A-Za-z0-9_-]{16,}", re.IGNORECASE))
+        for root_name in ("ledger", "raw", "reports", "lineage", "forecast", "outcomes-and-reports"):
+            root = Path("data") / root_name
+            if root.exists():
+                for path in root.rglob("*"):
+                    if path.is_file() and any(pattern.search(path.read_bytes()) for pattern in patterns): raise SystemExit("possible secret material in " + str(path))
+        PY
+    - name: Validate immutable ledger
+      id: immutable
+      if: always()
+      shell: bash
+      run: |
+        PYTHONPATH="${PYTHONPATH:+${PYTHONPATH}:}code/src" python - <<'PY'
+        from pathlib import Path
+        from nfl_predictor.workflows.dispatch import validate_immutable_append
+        validate_immutable_append(Path("data"))
+        PY
+    - name: Push immutable ledger append
+      if: always() && steps.leak_scan.outcome == 'success' && steps.immutable.outcome == 'success'
+      shell: bash
+      run: |
+        for append_root in ledger raw reports lineage forecast outcomes-and-reports; do
+          if [ -e "data/${append_root}" ]; then git -C data add -- "$append_root"; fi
+        done
+        if git -C data diff --cached --quiet; then exit 0; fi
+        git -C data config user.name "nfl-v2-automation"
+        git -C data config user.email "nfl-v2-automation@users.noreply.github.com"
+        git -C data commit -m "data: append immutable private due forecast"
+        git -C data push origin "HEAD:refs/heads/${PRIVATE_DEFAULT_BRANCH}"
+    - name: Fail after durable recording when provider failed
+      if: steps.provider.outcome != 'success'
+      shell: bash
+      run: exit 1
+    needs:
+    - admit-budget
+  heartbeat:
+    if: ${{ always() && vars.NFL_V2_DEPLOYMENT_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NFL_PREDICTOR_DATA_DIR: ${{ github.workspace }}/data
+      NFL_V2_RUNTIME_CONFIG: ${{ github.workspace }}/code/configs/base.toml
+      NFL_PRIVATE_CONFIG: ${{ github.workspace }}/data/config/data_repo.toml
+      NFL_PUBLIC_DISPATCH_MANIFEST: ${{ github.workspace }}/code/deploy/schedules/dispatch-windows-2026.json
+      FORECAST_PLAN_PATH: ${{ github.workspace }}/forecast-plan.json
+      PROVIDER_MAX_ATTEMPTS: '2'
+      RETRY_BACKOFF_SECONDS: '5'
+      NFL_V2_ARTIFACT_REGISTRY_SHA256: ${{ vars.NFL_V2_ARTIFACT_REGISTRY_SHA256 }}
+      PRIVATE_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+    steps:
+    - name: Check out private ledger
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        path: data
+        ref: refs/heads/${{ github.event.repository.default_branch }}
+    - name: Freeze UTC scheduler clock
+      id: clock
+      shell: bash
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        REQUESTED_AT: ${{ inputs.at }}
+      run: |
+        python - <<'PY'
+        import os
+        import re
+        import secrets
+        from datetime import UTC, datetime
+        from pathlib import Path
 
-          allowed = ("ledger/", "raw/", "reports/")
-          output = subprocess.check_output(
-              ["git", "-C", "data", "status", "--porcelain"], text=True
-          )
-          for line in output.splitlines():
-              path = line[3:]
-              if not path.startswith(allowed):
-                  raise SystemExit("write outside immutable append roots: " + path)
-          PY
-      - name: Push immutable ledger append
-        shell: bash
-        run: |
-          for append_root in ledger raw reports; do
-            if [ -e "data/${append_root}" ]; then
-              git -C data add -- "$append_root"
-            fi
-          done
-          if git -C data diff --cached --quiet; then
-            exit 0
-          fi
-          git -C data config user.name "nfl-v2-automation"
-          git -C data config user.email "nfl-v2-automation@users.noreply.github.com"
-          git -C data commit -m "data: append immutable private due forecast"
-          git -C data push origin HEAD
+        started = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        requested = os.environ.get("REQUESTED_AT", "")
+        if os.environ["EVENT_NAME"] == "workflow_dispatch":
+            if re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", requested) is None:
+                raise SystemExit("manual at must use YYYY-MM-DDTHH:MM:SSZ")
+            try:
+                datetime.strptime(requested, "%Y-%m-%dT%H:%M:%SZ")
+            except ValueError as error:
+                raise SystemExit("manual at must be a real UTC timestamp") from error
+            run_at = requested
+        elif os.environ["EVENT_NAME"] == "schedule":
+            run_at = started
+        else:
+            raise SystemExit("workflow trigger is not allowed")
+        with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+            for key, value in (("run_started_at_utc", started), ("run_at_utc", run_at)):
+                delimiter = "NFL_" + secrets.token_hex(16)
+                output.write(f"{key}<<{delimiter}\n{value}\n{delimiter}\n")
+        PY
+    - name: Enforce private 2026 UTC year lock
+      shell: bash
+      env:
+        RUN_AT_UTC: ${{ steps.clock.outputs.run_at_utc }}
+      run: test "${RUN_AT_UTC:0:4}" = "2026"
+    - name: Validate private due configuration
+      id: config
+      shell: bash
+      env:
+        CURRENT_REPOSITORY: ${{ github.repository }}
+        CONFIGURED_PUBLIC_REPOSITORY: ${{ vars.NFL_PUBLIC_REPOSITORY }}
+        RUN_STARTED_AT_UTC: ${{ steps.clock.outputs.run_started_at_utc }}
+      run: |
+        python - <<'PY'
+        import hashlib
+        import json
+        import os
+        import re
+        import tomllib
+        from pathlib import Path
+
+        root = Path(os.environ["NFL_PREDICTOR_DATA_DIR"]).resolve(strict=True)
+        config = tomllib.loads(Path(os.environ["NFL_PRIVATE_CONFIG"]).read_text())
+        private_path = (root / config["schedule"]["manifest_path"]).resolve(strict=True)
+        private_path.relative_to(root)
+        raw = private_path.read_bytes()
+        manifest = json.loads(raw)
+        schedule_sha = hashlib.sha256(raw).hexdigest()
+        if config.get("season") != 2026 or manifest.get("season") != 2026:
+            raise SystemExit("schedule is outside the 2026 season lock")
+        if not config["deployment_enabled"] or not manifest.get("deployment_enabled"):
+            raise SystemExit("deployment is disabled")
+        if config["authorization"]["target_private_repository"] != os.environ["CURRENT_REPOSITORY"]:
+            raise SystemExit("private repository is not the authorized target")
+        if config["authorization"]["source_public_repository"] != os.environ["CONFIGURED_PUBLIC_REPOSITORY"]:
+            raise SystemExit("configured public repository is not authorized")
+        if schedule_sha != config["schedule"]["manifest_sha256"]:
+            raise SystemExit("private schedule manifest hash mismatch")
+        if not config["schedule"]["generated_from_active_event_versions"] or not manifest.get("generated_from_active_event_versions"):
+            raise SystemExit("active event-version schedule is absent")
+        if os.environ["RUN_STARTED_AT_UTC"][:7] != config["month_lock"]:
+            raise SystemExit("workflow month is outside the reviewed month lock")
+        code_sha = config["authorization"]["approved_public_code_sha"]
+        if not re.fullmatch(r"[0-9a-f]{40}", code_sha):
+            raise SystemExit("approved public code SHA is absent or malformed")
+        with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+            output.write("code_sha=" + code_sha + "\n")
+            output.write("schedule_sha=" + schedule_sha + "\n")
+        PY
+    - name: Check out exact approved public SHA
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        repository: ${{ vars.NFL_PUBLIC_REPOSITORY }}
+        ref: ${{ steps.config.outputs.code_sha }}
+        path: code
+        persist-credentials: false
+    - name: Install locked Python 3.11
+      uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+      with:
+        python-version: '3.11'
+        enable-cache: false
+    - name: Restore frozen public environment
+      working-directory: code
+      shell: bash
+      run: uv sync --frozen
+    - name: Verify public/private/active schedule bytes
+      shell: bash
+      env:
+        EXPECTED_SCHEDULE_SHA: ${{ steps.config.outputs.schedule_sha }}
+      run: |
+        python - <<'PY'
+        import hashlib
+        import json
+        import os
+        import re
+        import tomllib
+        from pathlib import Path
+
+        data_root = Path(os.environ["NFL_PREDICTOR_DATA_DIR"]).resolve(strict=True)
+        config = tomllib.loads(Path(os.environ["NFL_PRIVATE_CONFIG"]).read_text())
+        public_raw = Path(os.environ["NFL_PUBLIC_DISPATCH_MANIFEST"]).resolve(strict=True).read_bytes()
+        private_path = (data_root / config["schedule"]["manifest_path"]).resolve(strict=True)
+        private_path.relative_to(data_root)
+        private_raw = private_path.read_bytes()
+        public_sha = hashlib.sha256(public_raw).hexdigest()
+        private_sha = hashlib.sha256(private_raw).hexdigest()
+        if not (public_sha == private_sha == os.environ["EXPECTED_SCHEDULE_SHA"] == config["schedule"]["manifest_sha256"]):
+            raise SystemExit("public/private dispatch schedule bytes are not cross-bound")
+        manifests = (json.loads(public_raw), json.loads(private_raw))
+        for manifest in manifests:
+            if manifest.get("season") != 2026 or config.get("season") != 2026:
+                raise SystemExit("schedule is outside the 2026 season lock")
+            if not manifest.get("deployment_enabled") or not manifest.get("generated_from_active_event_versions"):
+                raise SystemExit("schedule is not an enabled active-event derivation")
+        active_path = (data_root / config["schedule"]["active_event_version_manifest_path"]).resolve(strict=True)
+        active_path.relative_to(data_root)
+        active_raw = active_path.read_bytes()
+        active_sha = hashlib.sha256(active_raw).hexdigest()
+        if not re.fullmatch(r"[0-9a-f]{64}", active_sha) or not (active_sha == config["schedule"]["active_event_version_manifest_sha256"] == manifests[0]["active_event_version_manifest_sha256"] == manifests[1]["active_event_version_manifest_sha256"]):
+            raise SystemExit("active-event manifest bytes are not cross-bound")
+        active_manifest = json.loads(active_raw)
+        if active_manifest.get("season") != 2026 or not isinstance(active_manifest.get("files"), list):
+            raise SystemExit("active-event manifest is outside the 2026 season lock")
+        for record in active_manifest["files"]:
+            relative = Path(record["path"])
+            if relative.is_absolute() or ".." in relative.parts: raise SystemExit("active-event data path is unsafe")
+            data_path = (data_root / relative).resolve(strict=True)
+            data_path.relative_to(data_root)
+            if hashlib.sha256(data_path.read_bytes()).hexdigest() != record["sha256"]: raise SystemExit("active-event data byte hash mismatch")
+        PY
+    - name: Record target plus five heartbeat
+      shell: bash
+      run: |
+        cd code
+        uv run python - <<'PYCODE'
+        import json, os
+        from datetime import UTC, datetime
+        from pathlib import Path
+        from nfl_predictor.runtime.services import scheduled_heartbeats
+        records = scheduled_heartbeats(Path(os.environ["NFL_PREDICTOR_DATA_DIR"]), Path.cwd(), datetime.now(UTC))
+        alerts = [record for record in records if record["status"] != "complete"]
+        path = Path(os.environ["RUNNER_TEMP"]) / "nfl-v2-heartbeat-alerts.json"
+        path.write_text(json.dumps(alerts))
+        with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+            output.write("alert=" + ("true" if alerts else "false") + "\n")
+            output.write("alerts_path=" + str(path) + "\n")
+        PYCODE
+      id: heartbeat
+    - name: Open or update deduplicated safe alert
+      if: steps.heartbeat.outputs.alert == 'true'
+      shell: bash
+      env:
+        ALERTS_PATH: ${{ steps.heartbeat.outputs.alerts_path }}
+        CURRENT_PRIVATE_REPOSITORY: ${{ github.repository }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        python - <<'PY'
+        import json
+        import os
+        import subprocess
+        import tempfile
+        from pathlib import Path
+        for record in json.loads(Path(os.environ["ALERTS_PATH"]).read_text()):
+            title = f"[NFL V2 heartbeat] {record['event']} {record['origin']}"
+            found = json.loads(subprocess.check_output(["gh", "issue", "list", "--repo", os.environ["CURRENT_PRIVATE_REPOSITORY"], "--state", "open", "--search", title + " in:title", "--json", "number,title"], text=True))
+            body = "\n".join(f"{key}: {record[key]}" for key in ("event", "origin", "status", "code_sha")) + "\n"
+            with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as handle:
+                handle.write(body); body_path = handle.name
+            exact = next((item for item in found if item.get("title") == title), None)
+            if exact:
+                command = ["gh", "issue", "comment", str(exact["number"]), "--repo", os.environ["CURRENT_PRIVATE_REPOSITORY"], "--body-file", body_path]
+            else:
+                command = ["gh", "issue", "create", "--repo", os.environ["CURRENT_PRIVATE_REPOSITORY"], "--title", title, "--body-file", body_path]
+            subprocess.run(command, check=True)
+        PY
+    - name: Scan ledger for secret leakage
+      id: leak_scan
+      if: always()
+      shell: bash
+      run: |
+        python - <<'PY'
+        import re
+        from pathlib import Path
+        patterns = (re.compile(rb"ODDS_API_KEY\s*[:=]"), re.compile(rb"(?:github_pat_|ghp_)[A-Za-z0-9_]{20,}"), re.compile(rb"api[_-]?key\s*[:=]\s*[A-Za-z0-9_-]{16,}", re.IGNORECASE))
+        for root_name in ("ledger", "raw", "reports", "lineage", "forecast", "outcomes-and-reports"):
+            root = Path("data") / root_name
+            if root.exists():
+                for path in root.rglob("*"):
+                    if path.is_file() and any(pattern.search(path.read_bytes()) for pattern in patterns): raise SystemExit("possible secret material in " + str(path))
+        PY
+    - name: Validate immutable ledger
+      id: immutable
+      if: always()
+      shell: bash
+      run: |
+        PYTHONPATH="${PYTHONPATH:+${PYTHONPATH}:}code/src" python - <<'PY'
+        from pathlib import Path
+        from nfl_predictor.workflows.dispatch import validate_immutable_append
+        validate_immutable_append(Path("data"))
+        PY
+    - name: Push immutable ledger append
+      if: always() && steps.heartbeat.outcome == 'success' && steps.leak_scan.outcome == 'success' && steps.immutable.outcome
+        == 'success'
+      shell: bash
+      run: |
+        for append_root in ledger raw reports lineage forecast outcomes-and-reports; do
+          if [ -e "data/${append_root}" ]; then git -C data add -- "$append_root"; fi
+        done
+        if git -C data diff --cached --quiet; then exit 0; fi
+        git -C data config user.name "nfl-v2-automation"
+        git -C data config user.email "nfl-v2-automation@users.noreply.github.com"
+        git -C data commit -m "data: append immutable origin heartbeat"
+        git -C data push origin "HEAD:refs/heads/${PRIVATE_DEFAULT_BRANCH}"
+    needs:
+    - admit-budget
+    - private-due
+'on':
+  schedule:
+  - cron: 14 0 7 9 *
+  - cron: 19 0 7 9 *
+  - cron: 24 0 7 9 *
+  - cron: 29 0 7 9 *
+  - cron: 14 23 9 9 *
+  - cron: 19 23 9 9 *
+  - cron: 24 23 9 9 *
+  - cron: 29 23 9 9 *
+  - cron: 25 0 7 9 *
+  - cron: 25 23 9 9 *
+  workflow_dispatch:
+    inputs:
+      at:
+        description: Current UTC timestamp (YYYY-MM-DDTHH:MM:SSZ) for recovery
+        required: true
+        type: string

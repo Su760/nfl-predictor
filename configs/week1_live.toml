@@ -1,0 +1,18 @@
+season = 2026
+week = 1
+history_start = 2016
+history_end = 2025
+minimum_final_games_last_season = 272
+source_url = "https://raw.githubusercontent.com/nflverse/nfldata/master/data/games.csv"
+model_policy = "configs/model_policy_v1.toml"
+model_label = "Elo football baseline (unpromoted; uncalibrated)"
+data_root = "~/nfl-predictor-live-data"
+maximum_capture_age_seconds = 900
+request_timeout_seconds = 30
+poll_seconds = 60
+window_minutes = 10
+port = 8510
+bind = "127.0.0.1"
+zero_dollar_mode = true
+allow_paid_usage = false
+team_aliases = { SD = "LAC", OAK = "LV", STL = "LA" }

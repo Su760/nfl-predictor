@@ -33,7 +33,7 @@ from nfl_predictor.capture.service import CaptureService
 from nfl_predictor.cli import SchedulerFreshnessPolicy, ServiceRegistry
 from nfl_predictor.config import AppConfig, load_app_config
 from nfl_predictor.contracts.betting import BettingDecision
-from nfl_predictor.contracts.enums import Origin
+from nfl_predictor.contracts.enums import Origin, RunStatus
 from nfl_predictor.contracts.events import EventVersion, ForecastOrigin
 from nfl_predictor.contracts.forecasts import Prediction
 from nfl_predictor.contracts.markets import DisplayedQuoteCandidate, MoneylineQuote
@@ -44,7 +44,7 @@ from nfl_predictor.features.team_strength import PointInTimeRatingService
 from nfl_predictor.features.venue import VenueStore
 from nfl_predictor.identity.events import EventReconciler, ScheduleFact
 from nfl_predictor.identity.origins import OriginObligation
-from nfl_predictor.markets.budget import FileLockBudgetRepository, OddsBudget
+from nfl_predictor.markets.budget import AppendOnlyBudgetRepository, BudgetExceeded, OddsBudget
 from nfl_predictor.runtime.artifacts import VerifiedArtifactRegistry, VerifiedForecastPredictor
 from nfl_predictor.runtime.capture import (
     ArrowOutcomeAdapter,
@@ -75,7 +75,12 @@ from nfl_predictor.workflows.forecast import (
 )
 from nfl_predictor.workflows.outcomes import DurableOutcomeReportRepository, OutcomeWorkflow
 from nfl_predictor.workflows.report import ReportWorkflow
-from nfl_predictor.workflows.schedule_windows import due_clusters, exact_cron_entries, target_for
+from nfl_predictor.workflows.schedule_windows import (
+    due_clusters,
+    exact_cron_entries,
+    project_active_schedule,
+    target_for,
+)
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _CODE_SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -356,8 +361,11 @@ class RuntimeComponents:
         )
         odds_policy = load_odds_policy(app.code_root / "configs" / "odds_policy_v1.toml")
         budget = OddsBudget(
-            FileLockBudgetRepository(paths.data_root / "ledger" / "odds-budget.json"),
-            odds_policy.monthly_hard_stop,
+            AppendOnlyBudgetRepository(
+                paths.data_root / "ledger" / "budget-reservations" / str(config["month_lock"])
+            ),
+            min(config["cost_projection"]["monthly_hard_stop"], odds_policy.monthly_hard_stop),
+            admission_attempt_limit=config["cost_projection"]["per_origin_admission_attempts"],
         )
 
         def active_events() -> tuple[EventVersion, ...]:
@@ -365,6 +373,8 @@ class RuntimeComponents:
 
         optional_odds_capture = OptionalOddsCapture(
             policy=odds_policy,
+            admission_execution=environment.get("NFL_ODDS_ADMISSION_EXECUTION"),
+            require_admission=True,
             api_key=environment.get("ODDS_API_KEY"),
             budget=budget,
             capture_service=capture_service,
@@ -372,7 +382,7 @@ class RuntimeComponents:
                 key, client=active_clients.odds_http_client, clock=clock
             ),
             active_events=active_events,
-            month=lambda obligation: obligation.window.target_at_utc.strftime("%Y-%m"),
+            month=lambda _: clock().strftime("%Y-%m"),
             lineage=lineage,
         )
         reviewed_champions = _reviewed_champions(
@@ -616,6 +626,42 @@ class RuntimeComponents:
             "quarantined": quarantined,
             "activated": False,
         }
+
+    def admit_due_odds(
+        self, execution: str, now: datetime, *, event_id: str | None = None,
+        selected_origin: str | None = None,
+    ) -> None:
+        """Burn credits before the workflow's durable push and provider-secret job."""
+        if not re.fullmatch(r"[0-9]+:[0-9]+", execution):
+            raise ValueError("admission execution must bind workflow run and attempt")
+        config = _private_config(self.paths)
+        if now.strftime("%Y-%m") != config["month_lock"]:
+            raise ValueError("admission is outside the reviewed budget month")
+        if not self.odds_policy.capture_enabled:
+            return
+        events = self.active_events()
+        if event_id is not None:
+            matches = [event for event in events if event.canonical_event_id == event_id]
+            if len(matches) != 1 or selected_origin not in {origin.value for origin in Origin}:
+                raise ValueError("manual admission requires one active event and origin")
+            events = tuple(matches)
+        for event in events:
+            for origin in Origin:
+                if selected_origin is not None and origin.value != selected_origin:
+                    continue
+                obligation = OriginObligation(event, ForecastOrigin.for_kickoff(
+                    origin, event.kickoff_at_utc), self.forecast_policy_version)
+                window = obligation.window
+                if not window.window_opens_at_utc <= now <= window.window_closes_at_utc:
+                    continue
+                if self.prospective_repository.terminal_run(obligation.idempotency_key) is not None:
+                    continue
+                try:
+                    self.optional_odds_capture.budget.admit(
+                        now.strftime("%Y-%m"), execution, obligation.idempotency_key)
+                except BudgetExceeded:
+                    # The required football forecast continues with missing market evidence.
+                    continue
 
     def forecast_due(
         self,
@@ -893,6 +939,9 @@ class RuntimeComponents:
                 ("retry_allowance", "retry_seconds_each"),
             )
         )
+        jobs += tuple(JobProjection(name, projection[name], projection[name + "_seconds_each"])
+                      for name in ("nonce_admission_jobs", "budget_admission_jobs", "heartbeat_jobs")
+                      if name in projection)
         plan = plan_private_usage(
             jobs,
             projected_storage_bytes=int(projection["projected_storage_bytes"]),
@@ -918,16 +967,28 @@ class RuntimeComponents:
         if stored_projection != computed_projection:
             blockers.append("STORED_USAGE_PROJECTION_MISMATCH")
         stored_odds_requests = int(projection["projected_odds_requests"])
-        projected_odds_requests = self.odds_policy.worst_case_monthly_credits or 0
+        try:
+            active_events = self.active_events()
+            actual_requests, expected_counts = project_active_schedule(
+                active_events, tuple(schedule["public_offsets_minutes"]),
+                tuple(schedule["private_offsets_minutes"]), projection.get("schedule_change_calls", 0),
+            )
+            if any(projection.get(name, 0) != count for name, count in expected_counts.items()):
+                blockers.append("WORKFLOW_JOB_GRAPH_PROJECTION_MISMATCH")
+        except (DataIntegrityError, OSError, TypeError, ValueError):
+            actual_requests = 0
+            blockers.append("ACTIVE_EVENT_VERSION_SCHEDULE_UNAVAILABLE")
+        projected_odds_requests = max(actual_requests, self.odds_policy.worst_case_monthly_credits or 0)
+        private_cap = projection["monthly_hard_stop"]
         if stored_odds_requests != projected_odds_requests:
             blockers.append("STORED_ODDS_REQUEST_PROJECTION_MISMATCH")
-        if max(stored_odds_requests, projected_odds_requests) > self.odds_policy.monthly_hard_stop:
+        if max(stored_odds_requests, projected_odds_requests) > min(private_cap, self.odds_policy.monthly_hard_stop):
             blockers.append("ODDS_REQUEST_BUDGET_EXCEEDS_POLICY")
         if max(stored_odds_requests, projected_odds_requests) > 400:
             blockers.append("ODDS_REQUEST_BUDGET_EXCEEDS_400")
-        if bool(config.get("zero_dollar_mode")) and (
-            plan.projected_paid_actions_minutes or plan.projected_paid_storage_bytes
-        ):
+        if not config.get("zero_dollar_mode"):
+            blockers.append("ZERO_DOLLAR_MODE_DISABLED")
+        if plan.projected_paid_actions_minutes or plan.projected_paid_storage_bytes:
             blockers.append("PROJECTED_PAID_USAGE_NONZERO")
         schedule_complete = False
         verified_schedule: _VerifiedDispatchSchedule | None = None
@@ -946,7 +1007,7 @@ class RuntimeComponents:
             "github_billed_minutes": plan.github_billed_minutes,
             "projected_odds_requests": projected_odds_requests,
             "stored_projected_odds_requests": stored_odds_requests,
-            "odds_monthly_hard_stop": self.odds_policy.monthly_hard_stop,
+            "odds_monthly_hard_stop": private_cap,
             "projected_paid_actions_minutes": plan.projected_paid_actions_minutes,
             "projected_paid_storage_bytes": plan.projected_paid_storage_bytes,
             "schedule_complete": schedule_complete,
@@ -1196,3 +1257,56 @@ def build_production_runtime(
         services=components.service_registry(),
         scheduler_policy=components.scheduler_freshness_policy,
     )
+
+
+def record_origin_heartbeats(
+    events: Iterable[EventVersion], repository: DurableForecastRepository, now: datetime,
+    code_sha: str, policy_version: str, root: Path,
+) -> list[dict[str, str]]:
+    """Record the first target+5 observation, even when no worker ever ran.
+
+    Identity is the origin obligation, not scheduler time, code deployment or run ID.
+    Delayed/dropped Actions runs cannot guarantee a wall-clock +5 observation.
+    """
+    if now.utcoffset() != timedelta(0) or _CODE_SHA.fullmatch(code_sha) is None:
+        raise ValueError("heartbeat requires trusted UTC clock and code SHA")
+    records = []
+    for event in events:
+        for origin in Origin:
+            obligation = OriginObligation(event, ForecastOrigin.for_kickoff(
+                origin, event.kickoff_at_utc), policy_version)
+            if now < obligation.window.target_at_utc + timedelta(minutes=5):
+                continue
+            root.mkdir(parents=True, exist_ok=True)
+            digest = hashlib.sha256(obligation.idempotency_key.encode()).hexdigest()
+            destination = root / f"{digest}.json"
+            if destination.exists():
+                record = json.loads(destination.read_text())
+            else:
+                run = repository.terminal_run(obligation.idempotency_key)
+                status = "missing" if run is None else (
+                    "complete" if run.status in {RunStatus.COMPLETE, RunStatus.FOOTBALL_ONLY}
+                    else "failed")
+                record = {"event": event.canonical_event_id, "origin": origin.value,
+                          "status": status, "code_sha": code_sha}
+                with destination.open("x", encoding="utf-8") as handle:
+                    handle.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
+                    handle.flush()
+                    import os
+                    os.fsync(handle.fileno())
+            records.append(record)
+    return records
+
+
+def scheduled_heartbeats(data_root: Path, code_root: Path, now: datetime) -> list[dict[str, str]]:
+    """No provider client, feature/artifact readiness or due-window prerequisite."""
+    config = tomllib.loads((data_root / "config/data_repo.toml").read_text())
+    if config.get("deployment_enabled") is not True or now.year != 2026:
+        raise ValueError("heartbeat deployment is disabled or outside 2026")
+    lineage = DurableLineageRepository(data_root / "lineage", data_root)
+    events = lineage.load_active_events(data_root / "active-events.json",
+        config["schedule"]["active_event_version_manifest_sha256"])
+    return record_origin_heartbeats(events,
+        DurableForecastRepository(data_root / "forecast/prospective", "prospective"),
+        now, config["authorization"]["approved_public_code_sha"],
+        _forecast_policy_version(code_root), data_root / "ledger/heartbeats")

@@ -756,6 +756,8 @@ class ForecastRepository(Protocol):
 
     def latest_attempt(self, origin_run_id: str) -> RunAttempt | None: ...
 
+    def root_attempt(self, origin_run_id: str) -> RunAttempt | None: ...
+
     def append_attempt(self, attempt: RunAttempt) -> None: ...
 
     def append_capture_record(self, record: object) -> None: ...
@@ -1753,6 +1755,9 @@ class ForecastWorkflow:
                 }
             ).model_dump()
         )
+        root_attempt = repository.root_attempt(attempt.origin_run_id)
+        if root_attempt is None:
+            raise DataIntegrityError("terminal forecast root attempt is missing")
         run = OriginRun(
             origin_run_id=attempt.origin_run_id,
             canonical_event_id=obligation.event.canonical_event_id,
@@ -1762,7 +1767,7 @@ class ForecastWorkflow:
             target_at_utc=obligation.window.target_at_utc,
             window_opens_at_utc=obligation.window.window_opens_at_utc,
             window_closes_at_utc=obligation.window.window_closes_at_utc,
-            run_started_at_utc=attempt.started_at_utc,
+            run_started_at_utc=root_attempt.started_at_utc,
             decision_at_utc=decision_at,
             status=status,
             attempt_ids=[attempt.attempt_id],
@@ -1816,6 +1821,7 @@ class DurableForecastRepository:
         self.ledger = LedgerStore(root)
         self._terminal_namespace = f"forecast-terminal-{namespace}"
         self._terminal_receipt_namespace = f"forecast-terminal-receipt-{namespace}"
+        self._terminal_evidence_namespace = f"forecast-terminal-evidence-{namespace}"
         self._terminal_prepared_namespace = f"forecast-terminal-prepared-{namespace}"
         self._attempt_namespace = f"forecast-attempt-{namespace}"
         self._obligation_namespace = f"forecast-obligation-{namespace}"
@@ -1869,18 +1875,65 @@ class DurableForecastRepository:
         receipt = self._terminal_receipt_from_json(receipt_value)
         if receipt.execution_key != key or receipt.run_content_sha256 != digest:
             raise DataIntegrityError("terminal receipt does not match durable candidate")
-        receipt_published_at = self._terminal_receipt_publication_time(receipt_key)
+        observation = self._terminal_evidence_times(key, digest, receipt_value)
+        if observation is None:
+            return None
+        receipt_published_at, receipt_durable_at = observation
         if (
             self.namespace == "prospective"
             and run.status in {RunStatus.COMPLETE, RunStatus.FOOTBALL_ONLY}
             and (
                 receipt.candidate_durable_at_utc > run.window_closes_at_utc
+                or receipt_durable_at > run.window_closes_at_utc
                 or receipt_published_at
                 >= self._terminal_receipt_close_threshold(run.window_closes_at_utc)
             )
         ):
             return None
         return run
+
+    def _terminal_evidence_times(
+        self,
+        key: str,
+        run_digest: str,
+        receipt_value: dict[str, object],
+    ) -> tuple[datetime, datetime] | None:
+        evidence = self.ledger.read(
+            self._terminal_evidence_namespace, self._terminal_receipt_key(key, run_digest)
+        )
+        if evidence is None:
+            # Legacy and interrupted publications have no portable proof. Never infer
+            # an original observation from filesystem metadata in a restored checkout.
+            return None
+        fields = {
+            "version",
+            "execution_key",
+            "run_content_sha256",
+            "receipt_content_sha256",
+            "receipt_published_at_utc",
+            "receipt_durable_at_utc",
+        }
+        try:
+            if set(evidence) != fields or any(type(evidence[name]) is not str for name in fields):
+                raise ValueError("publication evidence fields must be exact strings")
+            if (
+                evidence["version"] != "terminal-publication-v1"
+                or evidence["execution_key"] != key
+                or evidence["run_content_sha256"] != run_digest
+                or evidence["receipt_content_sha256"]
+                != sha256(canonical_json_bytes(receipt_value)).hexdigest()
+            ):
+                raise ValueError("publication evidence binding does not match")
+            published_at = datetime.fromisoformat(evidence["receipt_published_at_utc"])
+            durable_at = datetime.fromisoformat(evidence["receipt_durable_at_utc"])
+            if any(
+                value.tzinfo is None or value.utcoffset() != UTC.utcoffset(value)
+                for value in (published_at, durable_at)
+            ):
+                raise ValueError("publication evidence times must be UTC")
+            return published_at, durable_at
+        except (TypeError, ValueError) as error:
+            raise DataIntegrityError("terminal publication evidence is invalid") from error
 
     @staticmethod
     def _terminal_receipt_key(key: str, run_digest: str) -> str:
@@ -2048,6 +2101,17 @@ class DurableForecastRepository:
             return None
         _, leaf = self._collapse_attempt_chain(records)
         return leaf
+
+    def root_attempt(self, origin_run_id: str) -> RunAttempt | None:
+        records = [
+            attempt
+            for logical_id, value in self._records(self._attempt_namespace)
+            if (attempt := self._attempt_record(logical_id, value)).origin_run_id == origin_run_id
+        ]
+        if not records:
+            return None
+        attempts, _ = self._collapse_attempt_chain(records)
+        return attempts[0]
 
     @staticmethod
     def _collapse_attempt_chain(
@@ -2815,7 +2879,9 @@ class DurableForecastRepository:
         if existing is not None:
             if self._terminal_receipt_from_json(existing) != receipt:
                 raise IdempotencyConflict(receipt_key)
-            return self._terminal_receipt_publication_time(receipt_key)
+            raise DataIntegrityError(
+                "existing terminal receipt has no original publication evidence"
+            )
 
         payload = canonical_json_bytes(self._json_value(receipt))
         content_digest = sha256(payload).hexdigest()
@@ -2849,7 +2915,9 @@ class DurableForecastRepository:
             existing = self.ledger.read(self._terminal_receipt_namespace, receipt_key)
             if existing is None or self._terminal_receipt_from_json(existing) != receipt:
                 raise IdempotencyConflict(receipt_key) from None
-            return self._terminal_receipt_publication_time(receipt_key)
+            raise DataIntegrityError(
+                "existing terminal receipt has no original publication evidence"
+            )
         published_at = self._terminal_receipt_publication_time(receipt_key)
         LedgerStore._fsync_directory(marker.parent)
         return published_at
@@ -2935,12 +3003,33 @@ class DurableForecastRepository:
                         key,
                         receipt,
                     )
+                    receipt_durable_at = clock()
                     if (
                         context.mode == "live"
-                        and receipt_published_at >= self._terminal_receipt_close_threshold(deadline)
                         and run.status is not RunStatus.MISSED
+                        and (
+                            receipt_published_at >= self._terminal_receipt_close_threshold(deadline)
+                            or receipt_durable_at > deadline
+                        )
                     ):
-                        return receipt_published_at
+                        return max(receipt_published_at, receipt_durable_at)
+                    # These observations belong to the original, now durable receipt
+                    # publication. Persisting/restoring this immutable evidence later
+                    # does not constitute a second publication or move its deadline.
+                    self.ledger.append(
+                        self._terminal_evidence_namespace,
+                        self._terminal_receipt_key(key, digest),
+                        {
+                            "version": "terminal-publication-v1",
+                            "execution_key": key,
+                            "run_content_sha256": digest,
+                            "receipt_content_sha256": sha256(
+                                canonical_json_bytes(self._json_value(receipt))
+                            ).hexdigest(),
+                            "receipt_published_at_utc": receipt_published_at.isoformat(),
+                            "receipt_durable_at_utc": receipt_durable_at.isoformat(),
+                        },
+                    )
                 finally:
                     fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
         finally:

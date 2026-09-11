@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import json
 import os
 import re
+import secrets
+import subprocess
+import tomllib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from hashlib import sha256
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from threading import Lock
 from typing import Protocol
 
@@ -39,6 +43,7 @@ _CLUSTER = re.compile(r"^(?:T72|T60):\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|\+0
 _CODE_SHA = re.compile(r"^[0-9a-f]{40}$")
 _MANIFEST_SHA = re.compile(r"^[0-9a-f]{64}$")
 _NONCE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,95}$")
+_ACTOR = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38}|[A-Za-z0-9-]{0,32}\[bot\])$")
 
 
 def _valid_cluster_id(value: str) -> bool:
@@ -78,6 +83,7 @@ class DispatchPolicy:
     approved_code_shas: frozenset[str]
     approved_schedule_manifest_shas: frozenset[str]
     allowed_cluster_ids: frozenset[str]
+    approved_actors: frozenset[str]
 
     def __post_init__(self) -> None:
         if not _REPOSITORY.fullmatch(self.source_repository):
@@ -98,6 +104,10 @@ class DispatchPolicy:
             not _valid_cluster_id(value) for value in self.allowed_cluster_ids
         ):
             raise ValueError("allowed cluster IDs must be an explicit nonempty allowlist")
+        if not self.approved_actors or any(
+            not _ACTOR.fullmatch(value) for value in self.approved_actors
+        ):
+            raise ValueError("approved actors must be an explicit nonempty exact allowlist")
 
     @classmethod
     def from_environment(cls, environment: Mapping[str, str]) -> DispatchPolicy:
@@ -107,6 +117,7 @@ class DispatchPolicy:
             "NFL_APPROVED_CODE_SHA",
             "NFL_APPROVED_SCHEDULE_MANIFEST_SHA",
             "NFL_APPROVED_CLUSTER_IDS",
+            "NFL_APPROVED_ACTORS",
         }
         missing = sorted(name for name in required if not environment.get(name))
         if missing:
@@ -122,6 +133,9 @@ class DispatchPolicy:
             ),
             allowed_cluster_ids=frozenset(
                 item for item in environment["NFL_APPROVED_CLUSTER_IDS"].split(",") if item
+            ),
+            approved_actors=frozenset(
+                item for item in environment["NFL_APPROVED_ACTORS"].split(",") if item
             ),
         )
 
@@ -230,6 +244,8 @@ _PROCESS_NONCES = InMemoryNonceStore()
 def validate_dispatch(
     payload: Mapping[str, object],
     *,
+    actor: str,
+    sender: str,
     policy: DispatchPolicy | None = None,
     nonce_store: NonceStore | None = None,
     environment: Mapping[str, str] | None = None,
@@ -240,6 +256,8 @@ def validate_dispatch(
         active_policy = DispatchPolicy.from_environment(
             os.environ if environment is None else environment
         )
+    if actor not in active_policy.approved_actors or sender not in active_policy.approved_actors:
+        raise DispatchRejected("dispatch actor or sender is not approved")
     if envelope.source_repository != active_policy.source_repository:
         raise DispatchRejected("dispatch source repository is not authorized")
     expected_ref = f"refs/heads/{active_policy.default_branch}"
@@ -289,7 +307,9 @@ class JobProjection:
     seconds_per_job: int
 
     def __post_init__(self) -> None:
-        if self.category not in REQUIRED_JOB_CATEGORIES:
+        if self.category not in REQUIRED_JOB_CATEGORIES | {
+            "nonce_admission_jobs", "budget_admission_jobs", "heartbeat_jobs"
+        }:
             raise ValueError("job projection category is not allowed")
         if isinstance(self.count, bool) or not isinstance(self.count, int):
             raise TypeError("job projection count must be an integer")
@@ -344,7 +364,10 @@ def plan_private_usage(
         raise TypeError("zero_dollar_mode must be a boolean")
     job_tuple = tuple(jobs)
     categories = [job.category for job in job_tuple]
-    if len(set(categories)) != len(categories) or set(categories) != REQUIRED_JOB_CATEGORIES:
+    if (len(set(categories)) != len(categories) or not REQUIRED_JOB_CATEGORIES.issubset(categories)
+            or not set(categories).issubset(REQUIRED_JOB_CATEGORIES | {
+                "nonce_admission_jobs", "budget_admission_jobs", "heartbeat_jobs"
+            })):
         raise ValueError("usage plan must contain each required job category exactly once")
     billed_minutes = sum(job.github_billed_minutes for job in job_tuple)
     paid_actions = max(0, billed_minutes - verified_included_actions_minutes_remaining)
@@ -367,3 +390,73 @@ def plan_private_usage(
         projected_paid_storage_bytes=paid_storage,
         zero_dollar_mode=zero_dollar_mode,
     )
+
+
+def render_public_dispatch(
+    manifest_path: Path, expected_sha: str, now: datetime,
+    source_repository: str, default_branch: str, code_sha: str,
+) -> dict[str, object]:
+    """Public-only dispatcher: trust reviewed public bytes, never private runtime files."""
+    from nfl_predictor.workflows.schedule_windows import parse_strict_utc_z
+
+    raw = manifest_path.read_bytes()
+    if sha256(raw).hexdigest() != expected_sha:
+        raise ValueError("public schedule hash mismatch")
+    manifest = json.loads(raw)
+    if now.utcoffset() != timedelta(0) or now.year != 2026 or manifest.get("season") != 2026:
+        raise ValueError("public dispatch is outside the UTC 2026 lock")
+    if not (manifest.get("deployment_enabled") is True
+            and manifest.get("generated_from_active_event_versions") is True
+            and _MANIFEST_SHA.fullmatch(str(manifest.get("active_event_version_manifest_sha256")))):
+        raise ValueError("public active schedule is disabled or unreviewed")
+    clusters = set()
+    for item in manifest["origin_targets"]:
+        target = parse_strict_utc_z(item["target_at_utc"])
+        if item["origin"] not in {"T72", "T60"} or target.year != 2026:
+            raise ValueError("invalid public origin target")
+        if abs(now - target) <= timedelta(minutes=10):
+            clusters.add(f"{item['origin']}:{target.isoformat()}")
+    if not clusters:
+        return {"due": False}
+    # A dispatch wakes the idempotent due worker for all simultaneously due obligations.
+    payload = build_dispatch_payload(
+        source_repository=source_repository, default_branch=default_branch,
+        cluster_id=min(clusters), code_sha=code_sha,
+        nonce=secrets.token_hex(24), schedule_manifest_sha=expected_sha,
+    )
+    return {"due": True, "repository_dispatch": repository_dispatch_request(payload)}
+
+
+def validate_immutable_append(data_root: Path) -> None:
+    """The single post-checkout guard for staged, unstaged and untracked private changes."""
+    config = tomllib.loads((data_root / "config/data_repo.toml").read_text())
+    allowed = frozenset(config["ledger"]["allowed_append_roots"])
+
+    def git(*arguments: str) -> bytes:
+        return subprocess.check_output(["git", "-C", str(data_root), *arguments])
+
+    def safe(raw: bytes) -> bool:
+        path = PurePosixPath(raw.decode("utf-8"))
+        return (not path.is_absolute() and ".." not in path.parts and bool(path.parts)
+                and path.parts[0] in allowed)
+
+    git("diff", "--check")
+    git("diff", "--cached", "--check")
+    for staged in (True, False):
+        arguments = ["diff", *(["--cached"] if staged else []), "--name-status", "-z",
+                     "--find-renames", "--find-copies"]
+        fields = git(*arguments).split(b"\0")
+        if fields[-1:] == [b""]:
+            fields.pop()
+        index = 0
+        while index < len(fields):
+            status = fields[index].decode("ascii")
+            count = 2 if status.startswith(("R", "C")) else 1
+            paths = fields[index + 1:index + count + 1]
+            index += count + 1
+            if (not staged or len(paths) != count or status != "A"
+                    or not all(safe(path) for path in paths)):
+                raise ValueError("tracked change violates immutable append policy")
+    if any(path and not safe(path)
+           for path in git("ls-files", "--others", "--exclude-standard", "-z").split(b"\0")):
+        raise ValueError("untracked file violates immutable append policy")

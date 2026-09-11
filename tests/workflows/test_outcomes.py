@@ -1875,11 +1875,90 @@ def test_pre_close_receipt_link_metadata_is_immutable_and_graph_stays_importable
     assert target.load_forecast_graph(graph.run.origin_run_id) == graph
 
 
+@pytest.mark.parametrize("metadata_case", ["coarse_prior_tick", "backdated_after_mutation"])
+def test_original_receipt_metadata_blocks_unverified_outcome_import(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    metadata_case: str,
+) -> None:
+    graph = (
+        fractional_close_forecast_graph()
+        if metadata_case == "coarse_prior_tick"
+        else forecast_graph()
+    )
+    source = prepare_forecast_graph(tmp_path / "forecast-source", graph)
+    key = graph.obligation.execution_key
+    deadline = graph.obligation.window_closes_at_utc
+    source.append_attempt(graph.attempts[-1])
+    digest = source._prepare_terminal(key, graph.run)
+    receipt_key = source._terminal_receipt_key(key, digest)
+    marker = source.ledger.marker_path(source._terminal_receipt_namespace, receipt_key)
+    after_close = deadline + timedelta(seconds=1)
+    if metadata_case == "coarse_prior_tick":
+        after_close = deadline + timedelta(microseconds=100_000)
+        prior_tick = after_close.replace(microsecond=0)
+        assert prior_tick < deadline < after_close
+        mtime_ns = ctime_ns = utc_nanoseconds(prior_tick)
+    else:
+        mtime_ns = utc_nanoseconds(deadline - timedelta(seconds=1))
+        ctime_ns = utc_nanoseconds(after_close)
+    real_link = forecast_module.os.link
+    real_stat = Path.stat
+    linked = False
+    metadata_observations = 0
+
+    def attacked_link(source_path: object, destination: object) -> None:
+        nonlocal linked
+        real_link(source_path, destination)
+        if Path(destination) == marker:  # type: ignore[arg-type]
+            linked = True
+            if metadata_case == "backdated_after_mutation":
+                os.utime(marker, ns=(mtime_ns, mtime_ns), follow_symlinks=False)
+
+    def original_metadata(path: Path, *args: object, **kwargs: object):
+        nonlocal metadata_observations
+        result = real_stat(path, *args, **kwargs)  # type: ignore[arg-type]
+        if path == marker:
+            assert linked
+            metadata_observations += 1
+            return SimpleNamespace(st_mtime_ns=mtime_ns, st_ctime_ns=ctime_ns)
+        return result
+
+    monkeypatch.setattr(forecast_module.os, "link", attacked_link)
+    monkeypatch.setattr(Path, "stat", original_metadata)
+    # Exercise real receipt linking, fsync and deadline verification, stopping before
+    # commit_terminal would replace the rejected success with a valid MISSED run.
+    crossed_at = source._publish_terminal(
+        key,
+        graph.run,
+        digest,
+        deadline=deadline,
+        context=ForecastExecutionContext.live(graph.obligation.target_at_utc),
+        clock=lambda: graph.obligation.target_at_utc,
+    )
+    assert linked and metadata_observations > 0
+    assert crossed_at is not None
+    assert source.ledger.read(source._terminal_receipt_namespace, receipt_key) is not None
+    assert source.ledger.read(source._terminal_evidence_namespace, receipt_key) is None
+    assert source.terminal_run(key) is None
+    reloaded = DurableForecastRepository(
+        source.root, "prospective", artifact_resolver=artifact_resolver_for(graph)
+    )
+    assert reloaded.terminal_run(key) is None
+    with pytest.raises(DataIntegrityError, match="terminal|committed"):
+        reloaded.load_committed_graph(key)
+    target = DurableOutcomeReportRepository(tmp_path / "outcomes", artifact_resolver_for(graph))
+    with pytest.raises(DataIntegrityError, match="terminal|committed"):
+        target.import_forecast_graph(reloaded, key)
+    assert target.ledger.read(target._FORECAST_GRAPHS, graph.run.origin_run_id) is None
+    assert not list((target.root / "commits").rglob("*.json"))
+
+
 @pytest.mark.parametrize(
     "metadata_case",
     ["coarse_prior_tick", "backdated_after_mutation"],
 )
-def test_receipt_metadata_must_fail_closed_for_live_reload_and_import(
+def test_completed_publication_survives_metadata_changes_on_reload_and_import(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     metadata_case: str,
@@ -1908,6 +1987,11 @@ def test_receipt_metadata_must_fail_closed_for_live_reload_and_import(
         mtime_ns = utc_nanoseconds(backdated)
         os.utime(marker, ns=(mtime_ns, mtime_ns), follow_symlinks=False)
         ctime_ns = utc_nanoseconds(deadline + timedelta(seconds=1))
+    original_bytes = {
+        path.relative_to(source.root): path.read_bytes()
+        for path in source.root.rglob("*")
+        if path.is_file()
+    }
     real_stat = Path.stat
 
     def simulated_receipt_metadata(path: Path, *args: object, **kwargs: object):
@@ -1918,20 +2002,24 @@ def test_receipt_metadata_must_fail_closed_for_live_reload_and_import(
 
     monkeypatch.setattr(Path, "stat", simulated_receipt_metadata)
 
-    assert source.terminal_run(graph.obligation.execution_key) is None
+    assert source.terminal_run(graph.obligation.execution_key) == graph.run
     reloaded = DurableForecastRepository(
         tmp_path / "forecast-source",
         "prospective",
         artifact_resolver=artifact_resolver_for(graph),
     )
-    assert reloaded.terminal_run(graph.obligation.execution_key) is None
+    assert reloaded.terminal_run(graph.obligation.execution_key) == graph.run
+    assert reloaded.load_committed_graph(graph.obligation.execution_key) == graph
     target = DurableOutcomeReportRepository(
         tmp_path / "outcomes",
         artifact_resolver_for(graph),
     )
-    with pytest.raises(DataIntegrityError, match="terminal|committed"):
-        target.import_forecast_graph(reloaded, graph.obligation.execution_key)
-    assert target.ledger.read(target._FORECAST_GRAPHS, graph.run.origin_run_id) is None
+    target.import_forecast_graph(reloaded, graph.obligation.execution_key)
+    assert target.load_forecast_graph(graph.run.origin_run_id) == graph
+    assert all(
+        (source.root / relative).read_bytes() == payload
+        for relative, payload in original_bytes.items()
+    )
 
 
 @pytest.mark.parametrize("boundary", ["import", "reload"])

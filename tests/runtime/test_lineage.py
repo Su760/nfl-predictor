@@ -24,6 +24,9 @@ class RuntimeFixture:
         self.data_root.mkdir()
         self.lineage = DurableLineageRepository(tmp_path / "lineage", self.data_root)
         self.event_file = self.data_root / "active" / "events.parquet"
+        raw = self.data_root / "raw/fixture.bin"
+        raw.parent.mkdir()
+        raw.write_bytes(b"archived fixture")
 
     @staticmethod
     def instant() -> datetime:
@@ -76,7 +79,7 @@ class RuntimeFixture:
             response_received_at_utc=instant,
             http_status=200,
             raw_path="raw/fixture.bin",
-            raw_payload_sha256="c" * 64,
+            raw_payload_sha256=hashlib.sha256(b"archived fixture").hexdigest(),
             response_headers_allowlisted={},
             code_sha="d" * 40,
             dependency_lock_sha256="e" * 64,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -19,7 +20,7 @@ class BudgetExceeded(RuntimeError):
 
 
 ReservationPriority = Literal["required_origin", "optional_close"]
-ReservationStatus = Literal["open", "consumed"]
+ReservationStatus = Literal["open", "admitted", "consumed"]
 
 
 def _validate_month(month: str) -> None:
@@ -55,7 +56,7 @@ class Reservation:
             raise ValueError("reservation credits must be positive")
         if self.priority not in {"required_origin", "optional_close"}:
             raise ValueError("reservation priority is invalid")
-        if self.status not in {"open", "consumed"}:
+        if self.status not in {"open", "admitted", "consumed"}:
             raise ValueError("reservation status is invalid")
 
 
@@ -100,7 +101,7 @@ class BudgetState:
 
     @property
     def consumed_local(self) -> int:
-        return sum(item.credits for item in self.reservations if item.status == "consumed")
+        return sum(item.credits for item in self.reservations if item.status in {"consumed", "admitted"})
 
     @property
     def projected_used(self) -> int:
@@ -152,7 +153,9 @@ class BudgetState:
         return replace(
             self,
             reservations=changed,
-            authoritative_used=self.authoritative_used + reservation.credits,
+            authoritative_used=self.authoritative_used + (
+                0 if reservation.status == "admitted" else reservation.credits
+            ),
         )
 
     def consume_with_authoritative_usage(
@@ -167,13 +170,16 @@ class BudgetState:
         if reservation.status == "open":
             changed, _ = self._mark_consumed(reservation_id)
             conservative_used += max(reservation.credits, last)
-        consumed_floor = sum(item.credits for item in changed if item.status == "consumed")
+        if reservation.status == "admitted":
+            changed, _ = self._mark_consumed(reservation_id)
+            conservative_used += max(0, last - reservation.credits)
+        consumed_floor = sum(item.credits for item in changed if item.status in {"consumed", "admitted"})
         return replace(
             self,
             reservations=changed,
             authoritative_used=max(
                 self.authoritative_used,
-                used,
+                used + sum(item.credits for item in changed if item.status == "admitted"),
                 consumed_floor,
                 conservative_used,
             ),
@@ -217,6 +223,64 @@ class FileLockBudgetRepository:
             return result
 
 
+class AppendOnlyBudgetRepository:
+    """One immutable snapshot per transaction; a kernel directory lock dies with its process.
+
+    Git admission uses a fast-forward push as the remote CAS. Never rebase a budget
+    snapshot: a rejected push must stop before credentials reach the worker.
+    """
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+
+    def transact(self, mutation: Mutation[T]) -> T:
+        self.root.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(self.root, os.O_RDONLY)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            paths = sorted(self.root.glob("*.json"))
+            previous = "0" * 64
+            state = BudgetState.empty()
+            for index, path in enumerate(paths):
+                raw = path.read_bytes()
+                digest = hashlib.sha256(raw).hexdigest()
+                if path.name != f"{index:08d}-{previous}-{digest}.json":
+                    raise ValueError("budget transaction chain is corrupt or forked")
+                state = _read_state(path)
+                previous = digest
+            changed, result = mutation(state)
+            if changed != state:
+                raw = json.dumps(asdict(changed), sort_keys=True, separators=(",", ":")).encode()
+                digest = hashlib.sha256(raw).hexdigest()
+                path = self.root / f"{len(paths):08d}-{previous}-{digest}.json"
+                with path.open("xb") as handle:
+                    handle.write(raw)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.fsync(descriptor)
+            return result
+        finally:
+            os.close(descriptor)
+
+    def claim(self, reservation: Reservation) -> None:
+        root = self.root / "claims"
+        root.mkdir(exist_ok=True)
+        path = root / f"{hashlib.sha256(reservation.request_id.encode()).hexdigest()}.json"
+        try:
+            with path.open("x", encoding="utf-8") as handle:
+                json.dump({"reservation_id": reservation.reservation_id,
+                           "request_id": reservation.request_id}, handle)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except FileExistsError as error:
+            raise BudgetExceeded("admitted request was already attempted") from error
+        descriptor = os.open(root, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+
 class CompareAndSwapStore(Protocol):
     def read(self) -> tuple[str, BudgetState]: ...
 
@@ -240,15 +304,55 @@ class CompareAndSwapBudgetRepository:
 
 
 class OddsBudget:
-    def __init__(self, repository: BudgetRepository, hard_stop: int) -> None:
+    def __init__(
+        self, repository: BudgetRepository, hard_stop: int, *, admission_attempt_limit: int = 2
+    ) -> None:
         if isinstance(hard_stop, bool) or not isinstance(hard_stop, int):
             raise TypeError("hard stop must be an integer")
         if hard_stop < 1:
             raise ValueError("hard stop must be positive")
         if hard_stop > 400:
             raise ValueError("hard stop cannot exceed 400 credits")
+        if type(admission_attempt_limit) is not int or not 1 <= admission_attempt_limit <= 2:
+            raise ValueError("admission attempts must obey the frozen two-attempt ceiling")
+        self.admission_attempt_limit = admission_attempt_limit
         self.repository = repository
         self.hard_stop = hard_stop
+
+    def admit(self, month: str, execution: str, obligation: str) -> Reservation:
+        request_id = f"admission:{execution}:{obligation}"
+        def mutation(raw: BudgetState) -> tuple[BudgetState, Reservation]:
+            state = raw.for_month(month)
+            if state.reservation_for(request_id) is not None:
+                raise BudgetExceeded("execution was already admitted")
+            # The reviewed execution contract allows at most the origin request and one retry.
+            if sum(item.request_id.startswith("admission:") and
+                   item.request_id.endswith(":" + obligation)
+                   for item in state.reservations) >= self.admission_attempt_limit:
+                raise BudgetExceeded("origin admission attempt ceiling reached")
+            if state.projected_used + 1 > self.hard_stop:
+                raise BudgetExceeded(month)
+            reservation = state.new_reservation(month, request_id, 1, "required_origin")
+            reservation = replace(reservation, status="admitted")
+            changed = replace(state, reservations=(*state.reservations, reservation),
+                              authoritative_used=state.authoritative_used + reservation.credits)
+            return changed, changed.reservation_by_id(reservation.reservation_id)
+        return self.repository.transact(mutation)
+
+    def claim_admitted(self, month: str, execution: str, obligation: str) -> Reservation:
+        if not isinstance(self.repository, AppendOnlyBudgetRepository):
+            raise TypeError("admission requires immutable budget persistence")
+        repository = self.repository
+        def mutation(raw: BudgetState) -> tuple[BudgetState, Reservation]:
+            state = raw.for_month(month)
+            reservation = state.reservation_for(f"admission:{execution}:{obligation}")
+            if reservation is None or reservation.status != "admitted":
+                raise BudgetExceeded("no durable reservation for this execution")
+            if state.projected_used > self.hard_stop:
+                raise BudgetExceeded("reviewed private hard stop was lowered or usage increased")
+            repository.claim(reservation)
+            return state, reservation
+        return repository.transact(mutation)
 
     def reserve(self, month: str, request_id: str, credits: int) -> Reservation:
         return self.reserve_required(month, request_id, credits)
@@ -334,7 +438,8 @@ class OddsBudget:
 
         def mutation(raw_state: BudgetState) -> tuple[BudgetState, None]:
             state = raw_state.for_month(month)
-            floor = max(state.authoritative_used, state.consumed_local, used)
+            floor = max(state.authoritative_used, state.consumed_local, used + sum(
+                item.credits for item in state.reservations if item.status == "admitted"))
             return replace(
                 state,
                 authoritative_used=floor,
@@ -407,3 +512,18 @@ def _write_state(path: Path, state: BudgetState) -> None:
     finally:
         if os.path.exists(temporary_name):
             os.unlink(temporary_name)
+
+
+def has_execution_claims(root: Path, execution: str) -> bool:
+    """Ignore earlier workflow claims; a malformed claim conservatively aborts recovery."""
+    prefix = f"admission:{execution}:"
+    for path in root.glob("*/claims/*.json"):
+        record = json.loads(path.read_text())
+        if not isinstance(record, dict):
+            raise TypeError("invalid budget claim record")
+        request_id = record.get("request_id", "")
+        if not isinstance(request_id, str):
+            raise TypeError("invalid budget claim request identity")
+        if request_id.startswith(prefix):
+            return True
+    return False

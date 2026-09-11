@@ -21,6 +21,7 @@ from nfl_predictor.workflows.dispatch import (
     plan_private_usage,
 )
 from nfl_predictor.workflows.forecast import ForecastExecutionContext
+from nfl_predictor.workflows.schedule_windows import parse_strict_utc_z, project_active_schedule
 
 ExecutionContext = ForecastExecutionContext
 
@@ -184,6 +185,7 @@ def register_core_commands(parser: argparse.ArgumentParser) -> None:
     odds_actions = odds.add_subparsers(dest="odds_action", required=True)
     odds_budget = odds_actions.add_parser("budget-plan")
     _season(odds_budget)
+    odds_budget.add_argument("--private-config", type=Path)
     odds_budget.set_defaults(route="odds.budget-plan")
 
     readiness = commands.add_parser("readiness")
@@ -238,9 +240,18 @@ def _context(
             _utc(requested, parser, "--at"),
             "CALLER_REQUESTED_HISTORICAL_REPLAY",
         )
+    requested_at: datetime | None = None
+    if requested is not None:
+        if getattr(arguments, "trigger", None) == "manual":
+            try:
+                requested_at = parse_strict_utc_z(requested)
+            except ValueError as error:
+                parser.error(str(error))
+        else:
+            requested_at = _utc(requested, parser, "--at")
     if (
-        requested is not None
-        and abs(_utc(requested, parser, "--at") - frozen_now) > scheduler_policy.maximum_skew
+        requested_at is not None
+        and abs(requested_at - frozen_now) > scheduler_policy.maximum_skew
     ):
         parser.error("live --at is outside scheduler freshness; use --mode replay")
     readiness_as_of = getattr(arguments, "as_of", None)
@@ -314,6 +325,9 @@ def _dispatch(
             context=context,
         )
     if route == "odds.budget-plan":
+        private_config = getattr(arguments, "private_config", None)
+        if private_config is not None:
+            return _private_budget_plan(private_config, arguments.season)
         return services.odds_budget_plan(season=arguments.season, context=context)
     if route == "readiness.check":
         return services.readiness_check(context=context)
@@ -385,14 +399,18 @@ def _offline_dispatch_due(
     return _offline_due_preview("dispatch.due", context)
 
 
-def _offline_odds_budget_plan(*, season: int, context: ExecutionContext) -> object:
-    del context
-    private_root = Path(__file__).resolve().parents[2] / "deploy" / "private-data-repo"
-    config = tomllib.loads((private_root / "config/data_repo.toml").read_text())
+def _private_budget_plan(config_path: Path, season: int) -> dict[str, object]:
+    if not config_path.is_absolute():
+        raise ValueError("private budget config path must be absolute")
+    config_path = config_path.resolve(strict=True)
+    private_root = config_path.parent.parent
+    config = tomllib.loads(config_path.read_text(encoding="utf-8"))
     if season != config["season"]:
         raise ValueError("budget-plan season does not match the reviewed deployment config")
     projection = config["cost_projection"]
-    jobs = (
+    if not isinstance(projection, dict):
+        raise TypeError("private cost projection must be a table")
+    jobs: tuple[JobProjection, ...] = (
         JobProjection(
             "private_due_ticks",
             projection["private_due_ticks"],
@@ -419,13 +437,18 @@ def _offline_odds_budget_plan(*, season: int, context: ExecutionContext) -> obje
             projection["retry_seconds_each"],
         ),
     )
+    jobs += tuple(JobProjection(name, projection[name], projection[name + "_seconds_each"])
+                  for name in ("nonce_admission_jobs", "budget_admission_jobs", "heartbeat_jobs")
+                  if name in projection)
     plan = plan_private_usage(
         jobs,
         projected_storage_bytes=projection["projected_storage_bytes"],
         verified_included_actions_minutes_remaining=projection[
             "verified_included_private_actions_minutes"
         ],
-        verified_included_storage_bytes_remaining=projection["verified_included_storage_bytes"],
+        verified_included_storage_bytes_remaining=projection[
+            "verified_included_storage_bytes"
+        ],
         zero_dollar_mode=False,
     )
     stored_projection = (
@@ -438,32 +461,85 @@ def _offline_odds_budget_plan(*, season: int, context: ExecutionContext) -> obje
         plan.projected_paid_actions_minutes,
         plan.projected_paid_storage_bytes,
     )
-    if stored_projection != computed_projection:
-        raise ValueError("stored private usage projection does not match typed planner")
-    manifest = json.loads((private_root / config["schedule"]["manifest_path"]).read_text())
-    schedule_complete = bool(
-        config["schedule"]["generated_from_active_event_versions"]
-        and manifest["generated_from_active_event_versions"]
-        and config["schedule"]["active_event_version_manifest_sha256"]
-        and manifest["active_event_version_manifest_sha256"]
-        == config["schedule"]["active_event_version_manifest_sha256"]
-    )
     blockers: list[str] = []
+    if stored_projection != computed_projection:
+        blockers.append("STORED_USAGE_PROJECTION_MISMATCH")
+
+    projected_odds_requests = projection.get("projected_odds_requests")
+    monthly_hard_stop = projection.get("monthly_hard_stop")
+    if (
+        isinstance(projected_odds_requests, bool)
+        or not isinstance(projected_odds_requests, int)
+        or projected_odds_requests < 0
+        or isinstance(monthly_hard_stop, bool)
+        or not isinstance(monthly_hard_stop, int)
+        or monthly_hard_stop < 1
+    ):
+        raise ValueError("odds request projection and monthly hard stop must be integers")
+    if projected_odds_requests > monthly_hard_stop:
+        blockers.append("ODDS_REQUEST_BUDGET_EXCEEDS_POLICY")
+    if monthly_hard_stop > 400 or projected_odds_requests > 400:
+        blockers.append("ODDS_REQUEST_BUDGET_EXCEEDS_400")
+
+    schedule = config["schedule"]
+    manifest_path = (private_root / schedule["manifest_path"]).resolve(strict=True)
+    try:
+        manifest_path.relative_to(private_root.resolve(strict=True))
+    except ValueError as error:
+        raise ValueError("private schedule manifest escapes data root") from error
+    manifest_raw = manifest_path.read_bytes()
+    manifest = json.loads(manifest_raw)
+    schedule_complete = bool(
+        hashlib.sha256(manifest_raw).hexdigest() == schedule["manifest_sha256"]
+        and schedule["generated_from_active_event_versions"]
+        and manifest["generated_from_active_event_versions"]
+        and schedule["active_event_version_manifest_sha256"]
+        and manifest["active_event_version_manifest_sha256"]
+        == schedule["active_event_version_manifest_sha256"]
+        and config["season"] == manifest["season"] == 2026
+    )
+    if schedule_complete:
+        from nfl_predictor.betting.policy import load_odds_policy
+        from nfl_predictor.runtime.lineage import DurableLineageRepository
+        from nfl_predictor.storage import DataIntegrityError
+
+        try:
+            active_path = (private_root / schedule["active_event_version_manifest_path"]).resolve(strict=True)
+            active_path.relative_to(private_root)
+            events = DurableLineageRepository(private_root / "lineage", private_root).load_active_events(
+                active_path, schedule["active_event_version_manifest_sha256"])
+            if not events or any(event.season != season for event in events):
+                raise ValueError("active event schedule is empty or outside the reviewed season")
+            actual_requests, expected_counts = project_active_schedule(
+                events, tuple(schedule["public_offsets_minutes"]),
+                tuple(schedule["private_offsets_minutes"]), projection.get("schedule_change_calls", 0),
+            )
+            if any(projection.get(name, 0) != count for name, count in expected_counts.items()):
+                blockers.append("WORKFLOW_JOB_GRAPH_PROJECTION_MISMATCH")
+            public_policy = load_odds_policy(
+                Path(__file__).resolve().parents[2] / "configs/odds_policy_v1.toml")
+            actual_requests = max(actual_requests, public_policy.worst_case_monthly_credits or 0)
+            if projected_odds_requests != actual_requests:
+                blockers.append("STORED_ODDS_REQUEST_PROJECTION_MISMATCH")
+            projected_odds_requests = actual_requests
+            if actual_requests > min(monthly_hard_stop, public_policy.monthly_hard_stop):
+                blockers.append("ODDS_REQUEST_BUDGET_EXCEEDS_POLICY")
+        except (DataIntegrityError, KeyError, OSError, TypeError, ValueError):
+            schedule_complete = False
     if not schedule_complete:
         blockers.append("ACTIVE_EVENT_VERSION_SCHEDULE_UNAVAILABLE")
-    if config["zero_dollar_mode"] and (
-        plan.projected_paid_actions_minutes or plan.projected_paid_storage_bytes
-    ):
+    if not config["zero_dollar_mode"]:
+        blockers.append("ZERO_DOLLAR_MODE_DISABLED")
+    if plan.projected_paid_actions_minutes or plan.projected_paid_storage_bytes:
         blockers.append("PROJECTED_PAID_USAGE_NONZERO")
-    if projection["projected_odds_requests"] > 400:
-        blockers.append("ODDS_REQUEST_BUDGET_EXCEEDS_400")
     if not config["deployment_enabled"]:
         blockers.append("DEPLOYMENT_DISABLED")
     return {
         "blockers": blockers,
         "deployment_allowed": not blockers,
         "github_billed_minutes": plan.github_billed_minutes,
-        "projected_odds_requests": projection["projected_odds_requests"],
+        "odds_monthly_hard_stop": monthly_hard_stop,
+        "projected_odds_requests": projected_odds_requests,
         "projected_paid_actions_minutes": plan.projected_paid_actions_minutes,
         "projected_paid_storage_bytes": plan.projected_paid_storage_bytes,
         "route": "odds.budget-plan",
@@ -471,6 +547,12 @@ def _offline_odds_budget_plan(*, season: int, context: ExecutionContext) -> obje
         "season": season,
         "zero_dollar_mode": config["zero_dollar_mode"],
     }
+
+
+def _offline_odds_budget_plan(*, season: int, context: ExecutionContext) -> object:
+    del context
+    private_root = Path(__file__).resolve().parents[2] / "deploy" / "private-data-repo"
+    return _private_budget_plan(private_root / "config/data_repo.toml", season)
 
 
 def _offline_service_registry() -> ServiceRegistry:
@@ -562,6 +644,13 @@ def main(
     result = _dispatch(arguments, services, context)
     if result is not None:
         print(json.dumps(_json_value(result), sort_keys=True))
+    if (
+        arguments.route == "odds.budget-plan"
+        and isinstance(result, Mapping)
+        and bool(result.get("blockers"))
+        and "DEPLOYMENT_DISABLED" not in cast(Sequence[object], result["blockers"])
+    ):
+        return 1
     return 0
 
 

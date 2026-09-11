@@ -323,3 +323,70 @@ def test_reserve_rejects_non_positive_integer_credits(credits: object) -> None:
     budget = OddsBudget(InMemoryBudgetRepository(), hard_stop=400)
     with pytest.raises((TypeError, ValueError), match="credits"):
         budget.reserve("2026-09", "request", credits)  # type: ignore[arg-type]
+
+
+def test_append_only_budget_preserves_previous_bytes_and_restarts(tmp_path):
+    repository_type = getattr(budget_module, "AppendOnlyBudgetRepository", None)
+    assert repository_type is not None, "production needs immutable budget transactions"
+    root = tmp_path / "budget"
+    budget = OddsBudget(repository_type(root), 2)
+    first = budget.reserve("2026-09", "first", 1)
+    before = {p.name: p.read_bytes() for p in root.iterdir() if p.is_file()}
+    budget.finalize_uncertain(first.reservation_id)
+    restarted = OddsBudget(repository_type(root), 2)
+    restarted.reserve("2026-09", "second", 1)
+    assert all((root / name).read_bytes() == data for name, data in before.items())
+    assert restarted.state("2026-09").projected_used == 2
+    with pytest.raises(BudgetExceeded):
+        restarted.reserve("2026-09", "third", 1)
+    assert all(p.suffix == ".json" for p in root.iterdir())
+
+
+def test_append_only_budget_failed_admission_remains_spent(tmp_path):
+    repository_type = getattr(budget_module, "AppendOnlyBudgetRepository", None)
+    assert repository_type is not None, "production needs restart-safe admission"
+    budget = OddsBudget(repository_type(tmp_path / "budget"), 1)
+    budget.admit("2026-09", "run-1-attempt-1", "event:T60:policy")
+    restarted = OddsBudget(repository_type(tmp_path / "budget"), 1)
+    assert restarted.state("2026-09").consumed_local == 1
+    with pytest.raises(BudgetExceeded):
+        restarted.admit("2026-09", "run-1-attempt-2", "event:T60:policy")
+    with pytest.raises(BudgetExceeded):
+        restarted.claim_admitted("2026-09", "run-1-attempt-2", "event:T60:policy")
+    restarted.claim_admitted("2026-09", "run-1-attempt-1", "event:T60:policy")
+    with pytest.raises(BudgetExceeded):
+        OddsBudget(repository_type(tmp_path / "budget"), 1).claim_admitted(
+            "2026-09", "run-1-attempt-1", "event:T60:policy")
+
+
+def test_admission_attempt_ceiling_survives_worker_crashes(tmp_path):
+    budget = OddsBudget(budget_module.AppendOnlyBudgetRepository(tmp_path / "budget"), 400)
+    budget.admit("2026-09", "1:1", "event:T60:policy")
+    budget.admit("2026-09", "2:1", "event:T60:policy")
+    with pytest.raises(BudgetExceeded):
+        budget.admit("2026-09", "3:1", "event:T60:policy")
+
+
+def test_admitted_authoritative_overrun_is_counted_once_with_stale_header(tmp_path):
+    budget = OddsBudget(budget_module.AppendOnlyBudgetRepository(tmp_path / "budget"), 400)
+    reservation = budget.admit("2026-09", "1:1", "event:T60:policy")
+    budget.finalize_success(reservation.reservation_id, "2026-09", used=1, remaining=497, last=3)
+    budget.finalize_success(reservation.reservation_id, "2026-09", used=1, remaining=497, last=3)
+    assert budget.state("2026-09").projected_used == 3
+
+
+@pytest.mark.parametrize("headers", [True, False])
+def test_authoritative_jump_preserves_other_prepaid_admission_cost(tmp_path, headers):
+    budget = OddsBudget(budget_module.AppendOnlyBudgetRepository(tmp_path / "budget"), 2)
+    first = budget.admit("2026-09", "1:1", "event-a:T60:policy")
+    budget.admit("2026-09", "1:1", "event-b:T60:policy")
+    budget.claim_admitted("2026-09", "1:1", "event-a:T60:policy")
+    if headers:
+        budget.finalize_success(first.reservation_id, "2026-09", used=2, remaining=498, last=1)
+        budget.finalize_success(first.reservation_id, "2026-09", used=2, remaining=498, last=1)
+        assert budget.state("2026-09").projected_used == 3
+    else:
+        budget.record_authoritative_usage("2026-09", used=2, remaining=498)
+        assert budget.state("2026-09").projected_used == 4
+    with pytest.raises(BudgetExceeded):
+        budget.claim_admitted("2026-09", "1:1", "event-b:T60:policy")

@@ -232,6 +232,12 @@ class DurableLineageRepository:
         if len(latest) != 1:
             raise DataIntegrityError("archived capture batch source is ambiguous at cutoff")
         source_batch, manifests, facts = latest[0]
+        for manifest in manifests:
+            self._verified_bytes(
+                self._safe_data_path(manifest.raw_path),
+                manifest.raw_payload_sha256,
+                "archived capture raw bytes",
+            )
         reconstructed_manifests = tuple(
             CaptureManifest.model_validate(
                 {

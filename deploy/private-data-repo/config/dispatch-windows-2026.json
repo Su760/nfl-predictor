@@ -27,8 +27,24 @@
       "target_at_utc": "2026-09-09T23:20:00Z"
     }
   ],
-  "public_offsets_minutes": [-8, -3, 2, 7],
-  "private_offsets_minutes": [-6, -1, 4, 9],
+  "public_offsets_minutes": [
+    -8,
+    -3,
+    2,
+    7
+  ],
+  "private_offsets_minutes": [
+    -6,
+    -1,
+    4,
+    9
+  ],
+  "execution_policy": {
+    "utc_year": 2026,
+    "provider_max_attempts": 2,
+    "retry_backoff_seconds": 5,
+    "heartbeat_delay_minutes": 5
+  },
   "public_crons": [
     "12 0 7 9 *",
     "17 0 7 9 *",
@@ -60,7 +76,12 @@
     "Install and hash the complete active 2026 event-version schedule",
     "Review every flex and TBD status against an official schedule source",
     "Approve an exact public code SHA and private target repository",
+    "Confirm the exact actor allowlist and active-event byte manifest",
     "Verify remaining included private Actions minutes and storage",
     "Regenerate both workflow cron lists and this manifest"
+  ],
+  "heartbeat_crons": [
+    "25 0 7 9 *",
+    "25 23 9 9 *"
   ]
 }

@@ -6,6 +6,7 @@ import pytest
 
 from nfl_predictor.contracts.enums import Origin
 from nfl_predictor.contracts.events import EventVersion
+from nfl_predictor.workflows import schedule_windows
 from nfl_predictor.workflows.schedule_windows import (
     build_schedule_windows,
     due_clusters,
@@ -120,3 +121,18 @@ def test_active_schedule_rejects_multiple_versions_of_one_event() -> None:
 def test_cron_offsets_must_be_unique_integer_window_offsets(offsets: tuple[object, ...]) -> None:
     with pytest.raises((TypeError, ValueError), match="offset"):
         exact_cron_entries([event()], offsets_minutes=offsets)  # type: ignore[arg-type]
+
+
+def test_manual_scheduler_timestamp_requires_exact_utc_z_wire_format() -> None:
+    parser = getattr(schedule_windows, "parse_strict_utc_z", None)
+    assert parser is not None, "strict manual timestamp parser is missing"
+
+    assert parser("2026-09-07T00:20:00Z") == datetime(2026, 9, 7, 0, 20, tzinfo=UTC)
+    for invalid in (
+        "2026-09-07T00:20:00+00:00",
+        "2026-09-07 00:20:00Z",
+        "2026-09-07T00:20:00.000Z",
+        "2026-09-07T00:20:00Z\nODDS_API_KEY=hostile",
+    ):
+        with pytest.raises(ValueError, match="YYYY-MM-DDTHH:MM:SSZ"):
+            parser(invalid)

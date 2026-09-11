@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import tomllib
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -28,6 +29,14 @@ NOW = datetime(2026, 9, 7, 0, 20, tzinfo=UTC)
 CODE_SHA = "a" * 40
 MANIFEST_SHA = "b" * 64
 CLUSTER_ID = "T72:2026-09-07T00:20:00+00:00"
+APPROVED_ACTOR = "Su760"
+PRIVATE_CONFIG = (
+    Path(__file__).resolve().parents[2]
+    / "deploy"
+    / "private-data-repo"
+    / "config"
+    / "data_repo.toml"
+)
 SCHEDULER_POLICY = SchedulerFreshnessPolicy(
     policy_version="scheduler-freshness-v1",
     maximum_skew=timedelta(minutes=5),
@@ -42,6 +51,7 @@ def dispatch_policy() -> DispatchPolicy:
         approved_code_shas=frozenset({CODE_SHA}),
         approved_schedule_manifest_shas=frozenset({MANIFEST_SHA}),
         allowed_cluster_ids=frozenset({CLUSTER_ID}),
+        approved_actors=frozenset({APPROVED_ACTOR}),
     )
 
 
@@ -72,6 +82,8 @@ def test_private_dispatch_rejects_wrong_sender_ref_event_type_or_code_sha(
                 {**valid_payload, field: value},
                 policy=dispatch_policy,
                 nonce_store=InMemoryNonceStore(),
+                actor=APPROVED_ACTOR,
+                sender=APPROVED_ACTOR,
             )
 
 
@@ -82,6 +94,8 @@ def test_dispatch_accepts_only_the_fixed_schema_and_approved_values(
         valid_payload,
         policy=dispatch_policy,
         nonce_store=InMemoryNonceStore(),
+        actor=APPROVED_ACTOR,
+        sender=APPROVED_ACTOR,
     )
 
     assert validated.cluster_id == CLUSTER_ID
@@ -102,6 +116,8 @@ def test_dispatch_accepts_only_the_fixed_schema_and_approved_values(
                 payload,
                 policy=dispatch_policy,
                 nonce_store=InMemoryNonceStore(),
+                actor=APPROVED_ACTOR,
+                sender=APPROVED_ACTOR,
             )
 
 
@@ -115,6 +131,8 @@ def test_dispatch_schema_rejects_non_string_keys_without_leaking_type_errors(
             hostile,
             policy=dispatch_policy,
             nonce_store=InMemoryNonceStore(),
+            actor=APPROVED_ACTOR,
+            sender=APPROVED_ACTOR,
         )
 
 
@@ -126,6 +144,7 @@ def test_dispatch_policy_rejects_an_impossible_utc_cluster_target() -> None:
             approved_code_shas=frozenset({CODE_SHA}),
             approved_schedule_manifest_shas=frozenset({MANIFEST_SHA}),
             allowed_cluster_ids=frozenset({"T72:2026-99-99T99:99:99+00:00"}),
+            approved_actors=frozenset({APPROVED_ACTOR}),
         )
 
 
@@ -150,6 +169,7 @@ def test_explicit_empty_policy_environment_never_falls_back_to_process_state(
         "NFL_APPROVED_CODE_SHA": CODE_SHA,
         "NFL_APPROVED_SCHEDULE_MANIFEST_SHA": MANIFEST_SHA,
         "NFL_APPROVED_CLUSTER_IDS": CLUSTER_ID,
+        "NFL_APPROVED_ACTORS": APPROVED_ACTOR,
     }
     for name, value in process_policy.items():
         monkeypatch.setenv(name, value)
@@ -159,6 +179,8 @@ def test_explicit_empty_policy_environment_never_falls_back_to_process_state(
             {**valid_payload, "nonce": "20260907T002000Z-explicit-empty"},
             environment={},
             nonce_store=InMemoryNonceStore(),
+            actor=APPROVED_ACTOR,
+            sender=APPROVED_ACTOR,
         )
 
 
@@ -167,26 +189,89 @@ def test_nonce_is_consumed_only_once_after_full_validation(
 ) -> None:
     nonces = InMemoryNonceStore()
 
-    validate_dispatch(valid_payload, policy=dispatch_policy, nonce_store=nonces)
+    validate_dispatch(
+        valid_payload,
+        policy=dispatch_policy,
+        nonce_store=nonces,
+        actor=APPROVED_ACTOR,
+        sender=APPROVED_ACTOR,
+    )
 
     with pytest.raises(DispatchRejected, match="replay"):
-        validate_dispatch(valid_payload, policy=dispatch_policy, nonce_store=nonces)
+        validate_dispatch(
+            valid_payload,
+            policy=dispatch_policy,
+            nonce_store=nonces,
+            actor=APPROVED_ACTOR,
+            sender=APPROVED_ACTOR,
+        )
 
 
 def test_file_nonce_store_persists_replay_defense(
     tmp_path: Path, valid_payload: dict[str, str], dispatch_policy: DispatchPolicy
 ) -> None:
     first_process = FileNonceStore(tmp_path / "nonces")
-    validate_dispatch(valid_payload, policy=dispatch_policy, nonce_store=first_process)
+    validate_dispatch(
+        valid_payload,
+        policy=dispatch_policy,
+        nonce_store=first_process,
+        actor=APPROVED_ACTOR,
+        sender=APPROVED_ACTOR,
+    )
 
     second_process = FileNonceStore(tmp_path / "nonces")
     with pytest.raises(DispatchRejected, match="replay"):
-        validate_dispatch(valid_payload, policy=dispatch_policy, nonce_store=second_process)
+        validate_dispatch(
+            valid_payload,
+            policy=dispatch_policy,
+            nonce_store=second_process,
+            actor=APPROVED_ACTOR,
+            sender=APPROVED_ACTOR,
+        )
 
     files = tuple((tmp_path / "nonces").iterdir())
     assert len(files) == 1
     assert files[0].name.endswith(".nonce")
     assert valid_payload["nonce"] not in files[0].name
+
+
+@pytest.mark.parametrize(
+    ("actor", "sender"),
+    [
+        ("attacker", APPROVED_ACTOR),
+        (APPROVED_ACTOR, "attacker"),
+        ("su760", APPROVED_ACTOR),
+        (APPROVED_ACTOR, "su760"),
+    ],
+)
+def test_actor_and_event_sender_are_exactly_allowed_before_nonce_consumption(
+    tmp_path: Path,
+    valid_payload: dict[str, str],
+    dispatch_policy: DispatchPolicy,
+    actor: str,
+    sender: str,
+) -> None:
+    nonce_root = tmp_path / "nonces"
+    store = FileNonceStore(nonce_root)
+
+    with pytest.raises(DispatchRejected, match="actor or sender"):
+        validate_dispatch(
+            valid_payload,
+            policy=dispatch_policy,
+            nonce_store=store,
+            actor=actor,
+            sender=sender,
+        )
+
+    assert not nonce_root.exists() or tuple(nonce_root.iterdir()) == ()
+    validated = validate_dispatch(
+        valid_payload,
+        policy=dispatch_policy,
+        nonce_store=store,
+        actor=APPROVED_ACTOR,
+        sender=APPROVED_ACTOR,
+    )
+    assert validated.nonce == valid_payload["nonce"]
 
 
 def test_public_builder_emits_only_the_fixed_repository_dispatch_envelope(
@@ -247,6 +332,73 @@ def test_private_usage_projection_rounds_each_github_job_and_rejects_paid_usage(
             zero_dollar_mode=True,
         )
 
+
+def test_deployed_private_projection_counts_all_eight_workers_with_per_job_rounding() -> None:
+    config = tomllib.loads(PRIVATE_CONFIG.read_text(encoding="utf-8"))
+    projection = config["cost_projection"]
+    jobs = tuple(
+        JobProjection(category, projection[category], projection[seconds])
+        for category, seconds in (
+            ("private_due_ticks", "private_due_seconds_each"),
+            ("full_forecast_workers", "full_forecast_seconds_each"),
+            ("settlement_jobs", "settlement_seconds_each"),
+            ("correction_jobs", "correction_seconds_each"),
+            ("retry_allowance", "retry_seconds_each"),
+            ("nonce_admission_jobs", "nonce_admission_jobs_seconds_each"),
+            ("budget_admission_jobs", "budget_admission_jobs_seconds_each"),
+            ("heartbeat_jobs", "heartbeat_jobs_seconds_each"),
+        )
+    )
+
+    plan = plan_private_usage(
+        jobs,
+        projected_storage_bytes=projection["projected_storage_bytes"],
+        verified_included_actions_minutes_remaining=projection[
+            "verified_included_private_actions_minutes"
+        ],
+        verified_included_storage_bytes_remaining=projection[
+            "verified_included_storage_bytes"
+        ],
+        zero_dollar_mode=False,
+    )
+
+    assert projection["full_forecast_workers"] == 8
+    assert plan.github_billed_minutes == 143
+    assert projection["projected_github_billed_minutes"] == plan.github_billed_minutes
+    assert projection["projected_paid_actions_minutes"] == plan.projected_paid_actions_minutes
+
+
+def test_budget_plan_reads_explicit_private_config_enforces_request_cap_and_fails_enabled_blockers(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    raw = PRIVATE_CONFIG.read_text(encoding="utf-8")
+    raw = raw.replace("deployment_enabled = false", "deployment_enabled = true", 1)
+    raw = raw.replace("monthly_hard_stop = 400", "monthly_hard_stop = 5", 1)
+    private_config = tmp_path / "config" / "data_repo.toml"
+    private_config.parent.mkdir()
+    (private_config.parent / "dispatch-windows-2026.json").write_bytes(
+        PRIVATE_CONFIG.with_name("dispatch-windows-2026.json").read_bytes()
+    )
+    private_config.write_text(raw, encoding="utf-8")
+
+    code = main(
+        [
+            "odds",
+            "budget-plan",
+            "--season",
+            "2026",
+            "--private-config",
+            str(private_config),
+        ],
+        clock=lambda: NOW,
+    )
+
+    rendered = json.loads(capsys.readouterr().out)
+    assert code == 1
+    assert rendered["projected_odds_requests"] == 6
+    assert rendered["odds_monthly_hard_stop"] == 5
+    assert "ODDS_REQUEST_BUDGET_EXCEEDS_POLICY" in rendered["blockers"]
+    assert rendered["deployment_allowed"] is False
 
 class Task13Services:
     def __init__(self) -> None:
@@ -418,7 +570,7 @@ def test_unconfigured_offline_due_preview_reports_the_active_schedule_blocker(
         "reason": "ACTIVE_EVENT_VERSION_SCHEDULE_UNAVAILABLE",
         "route": route,
         "schedule_manifest_sha": (
-            "4f44499226db9a9ac65e06fdc1aa8c2a2182c6312597ffcf0c163988a5b7e3ff"
+            "d84ef7a4522608997477c0a81ad2f5c8037841af9b87f3867d6a77bae400cccd"
         ),
     }
 
@@ -436,9 +588,10 @@ def test_unconfigured_offline_budget_plan_reports_zero_dollar_blockers(
             "DEPLOYMENT_DISABLED",
         ],
         "deployment_allowed": False,
-        "github_billed_minutes": 23,
+        "github_billed_minutes": 143,
+        "odds_monthly_hard_stop": 400,
         "projected_odds_requests": 6,
-        "projected_paid_actions_minutes": 23,
+        "projected_paid_actions_minutes": 143,
         "projected_paid_storage_bytes": 104857600,
         "route": "odds.budget-plan",
         "schedule_complete": False,
@@ -557,3 +710,63 @@ def test_forecast_due_dry_run_preserves_live_and_replay_clock_semantics() -> Non
     assert context == ForecastExecutionContext.replay(
         historical, "CALLER_REQUESTED_HISTORICAL_REPLAY"
     )
+
+
+def test_live_manual_cli_time_requires_strict_utc_z_wire_format() -> None:
+    services = Task13Services()
+    registry = task13_registry(services)
+
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "forecast",
+                "due",
+                "--trigger",
+                "manual",
+                "--at",
+                NOW.isoformat(),
+                "--dry-run",
+            ],
+            services=registry,
+            clock=lambda: NOW,
+            scheduler_policy=SCHEDULER_POLICY,
+        )
+    assert services.calls == []
+
+    assert (
+        main(
+            [
+                "forecast",
+                "due",
+                "--trigger",
+                "manual",
+                "--at",
+                "2026-09-07T00:20:00Z",
+                "--dry-run",
+            ],
+            services=registry,
+            clock=lambda: NOW,
+            scheduler_policy=SCHEDULER_POLICY,
+        )
+        == 0
+    )
+
+
+def test_enabled_public_manifest_dispatches_without_private_runtime(tmp_path):
+    import hashlib
+    import json
+    from datetime import UTC, datetime
+
+    import nfl_predictor.workflows.dispatch as module
+    renderer = getattr(module, "render_public_dispatch", None)
+    assert renderer is not None, "public dispatch needs an enabled-manifest path"
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps({"season": 2026, "deployment_enabled": True,
+        "generated_from_active_event_versions": True,
+        "active_event_version_manifest_sha256": "a" * 64,
+        "origin_targets": [{"origin": "T72", "target_at_utc": "2026-09-07T00:20:00Z"}]}))
+    result = renderer(path, hashlib.sha256(path.read_bytes()).hexdigest(),
+        datetime(2026, 9, 7, 0, 20, tzinfo=UTC), "owner/public", "main", "b" * 40)
+    assert result["repository_dispatch"]["client_payload"]["cluster_id"] == "T72:2026-09-07T00:20:00+00:00"
+    with pytest.raises(ValueError, match="hash"):
+        renderer(path, "0" * 64, datetime(2026, 9, 7, tzinfo=UTC), "owner/public", "main", "b" * 40)

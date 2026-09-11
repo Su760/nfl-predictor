@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from nfl_predictor.contracts.enums import Origin
 from nfl_predictor.contracts.events import EventVersion, ForecastOrigin
 
 ORIGINS = (Origin.T72, Origin.T60)
 WINDOW_MINUTES = 10
+_STRICT_UTC_Z = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 
 @dataclass(frozen=True)
@@ -27,6 +29,15 @@ class ScheduleWindows:
 def _require_utc(value: datetime, field: str) -> None:
     if value.tzinfo is None or value.utcoffset() != timedelta(0):
         raise ValueError(f"{field} must be timezone-aware UTC")
+
+
+def parse_strict_utc_z(value: str) -> datetime:
+    if not isinstance(value, str) or _STRICT_UTC_Z.fullmatch(value) is None:
+        raise ValueError("timestamp must use YYYY-MM-DDTHH:MM:SSZ")
+    try:
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+    except ValueError as error:
+        raise ValueError("timestamp must use YYYY-MM-DDTHH:MM:SSZ") from error
 
 
 def _require_active_events(events: Sequence[EventVersion]) -> None:
@@ -107,3 +118,22 @@ def due_clusters(events: Sequence[EventVersion], now: datetime) -> tuple[DueClus
         )
         for (origin, target), event_ids in ordered
     )
+
+
+def project_active_schedule(
+    events: Sequence[EventVersion], public_offsets: tuple[int, ...],
+    private_offsets: tuple[int, ...], schedule_change_calls: int,
+) -> tuple[int, dict[str, int]]:
+    """Shared actual-event request and job graph derivation for both private planners."""
+    if type(schedule_change_calls) is not int or schedule_change_calls < 0:
+        raise ValueError("schedule change calls must be a nonnegative integer")
+    public_ticks = set(exact_cron_entries(events, public_offsets))
+    private_ticks = set(exact_cron_entries(events, private_offsets))
+    heartbeat_ticks = private_ticks | set(exact_cron_entries(events, (5,)))
+    return len(events) * len(ORIGINS) * 2 + schedule_change_calls, {
+        "full_forecast_workers": len(public_ticks),
+        "private_due_ticks": len(private_ticks),
+        "nonce_admission_jobs": len(public_ticks),
+        "budget_admission_jobs": len(public_ticks) + len(private_ticks),
+        "heartbeat_jobs": len(heartbeat_ticks),
+    }

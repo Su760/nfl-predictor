@@ -788,7 +788,11 @@ class OptionalOddsCapture:
         active_events: Callable[[], Iterable[EventVersion]],
         month: Callable[[OriginObligation], str],
         lineage: DurableLineageRepository,
+        admission_execution: str | None = None,
+        require_admission: bool = False,
     ) -> None:
+        self.admission_execution = admission_execution
+        self.require_admission = require_admission
         if not isinstance(lineage, DurableLineageRepository):
             raise TypeError("odds capture requires a DurableLineageRepository")
         self.policy = policy
@@ -809,7 +813,12 @@ class OptionalOddsCapture:
             raise MarketCaptureDisabled("market capture is disabled")
         month = self.month(obligation)
         request_id = f"{obligation.idempotency_key}:{attempt_id}"
-        reservation = self.budget.reserve_required(month, request_id, 1)
+        if self.require_admission:
+            reservation = self.budget.claim_admitted(
+                month, self.admission_execution or "", obligation.idempotency_key
+            )
+        else:
+            reservation = self.budget.reserve_required(month, request_id, 1)
         authoritative_finalized = False
         try:
             adapter = self.adapter_factory(self.api_key)

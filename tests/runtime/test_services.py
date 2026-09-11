@@ -129,6 +129,8 @@ class RuntimeTree:
                     "private_offsets_minutes = [-6, -1, 4, 9]",
                     "",
                     "[cost_projection]",
+                    "monthly_hard_stop = 400",
+                    "per_origin_admission_attempts = 2",
                     'projection_status = "VERIFIED"',
                     'runner_class = "ubuntu-latest"',
                     'github_rounding = "ceil_each_job_to_whole_minute"',
@@ -729,9 +731,18 @@ def test_dispatch_due_rejects_non_2xx_repository_response(
     config_path.write_text(
         config_path.read_text(encoding="utf-8").replace(
             "deployment_enabled = false", "deployment_enabled = true"
-        ),
+        ).replace("projected_odds_requests = 0", "projected_odds_requests = 4"),
         encoding="utf-8",
     )
+    config_text = config_path.read_text()
+    for old, new in (("private_due_ticks = 0", "private_due_ticks = 8"),
+                     ("private_due_seconds_each = 15", "private_due_seconds_each = 121"),
+                     ("full_forecast_workers = 0", "full_forecast_workers = 8"),
+                     ("projected_github_billed_minutes = 0", "projected_github_billed_minutes = 134"),
+                     ("verified_included_private_actions_minutes = 0", "verified_included_private_actions_minutes = 200")):
+        config_text = config_text.replace(old, new)
+    config_text = config_text.replace("[cost_projection]", "[cost_projection]\nnonce_admission_jobs = 8\nnonce_admission_jobs_seconds_each = 15\nbudget_admission_jobs = 16\nbudget_admission_jobs_seconds_each = 121\nheartbeat_jobs = 10\nheartbeat_jobs_seconds_each = 121")
+    config_path.write_text(config_text)
     runtime = runtime_module.build_production_runtime(
         runtime_tree.base_config,
         runtime_tree.environment,
@@ -793,3 +804,125 @@ def test_dispatch_due_rejects_active_schedule_rotation_before_http(
         )
 
     assert client.calls == 0
+
+
+def test_real_runtime_budget_uses_private_lower_cap_and_immutable_repository(tmp_path):
+    tree = RuntimeTree(tmp_path)
+    path = tree.data_root / "config/data_repo.toml"
+    path.write_text(path.read_text().replace('monthly_hard_stop = 400', 'monthly_hard_stop = 1'))
+    runtime = tree.runtime()
+    budget = runtime.services.forecast_run.__self__.optional_odds_capture.budget
+    assert budget.hard_stop == 1, "actual capture must use private cap"
+    assert type(budget.repository).__name__ == "AppendOnlyBudgetRepository"
+    first = budget.reserve("2026-09", "first", 1)
+    budget.finalize_uncertain(first.reservation_id)
+    from nfl_predictor.markets.budget import BudgetExceeded
+    with pytest.raises(BudgetExceeded):
+        tree.runtime().services.forecast_run.__self__.optional_odds_capture.budget.reserve("2026-09", "second", 1)
+
+
+def test_heartbeat_checks_missing_origin_after_window_and_uses_stable_identity(tmp_path):
+    tree = RuntimeTree(tmp_path)
+    event = tree.install_due_event()
+    function = getattr(services_module, "record_origin_heartbeats", None)
+    assert function is not None, "heartbeats must inspect persisted domain status"
+    repository = DurableForecastRepository(tree.data_root / "forecast/prospective", "prospective")
+    first = function((event,), repository, NOW + timedelta(minutes=20), CODE_SHA,
+        "forecast-v1", tree.data_root / "ledger/heartbeats")
+    assert first[0]["status"] == "missing"
+    second = function((event,), repository, NOW + timedelta(minutes=30), CODE_SHA,
+        "forecast-v1", tree.data_root / "ledger/heartbeats")
+    assert second == first
+    assert len(list((tree.data_root / "ledger/heartbeats").glob("*.json"))) == 1
+
+
+@pytest.mark.parametrize("missed", [False, True])
+def test_heartbeat_uses_real_failed_or_missed_domain_run(tmp_path, missed):
+    import importlib.util
+    path = Path(__file__).resolve().parents[1] / "workflows/test_forecast.py"
+    specification = importlib.util.spec_from_file_location("forecast_fixture", path)
+    module = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(module)
+    item, clock, required, _, workflow, repository = module._durable_workflow(tmp_path / "forecast")
+    if missed:
+        clock.set(item.window.window_closes_at_utc + timedelta(seconds=1))
+    else:
+        required.capture_live = lambda *_: (_ for _ in ()).throw(ValueError("fixture"))
+    run = workflow.run(item, "fixture", ForecastExecutionContext.live(clock()))
+    assert run.status.value == ("MISSED" if missed else "FAILED")
+    records = services_module.record_origin_heartbeats((item.event,), repository,
+        item.window.target_at_utc + timedelta(minutes=20), CODE_SHA,
+        item.policy_version, tmp_path / "heartbeats")
+    assert next(record for record in records if record["origin"] == item.window.origin.value)["status"] == "failed"
+
+
+def test_runtime_budget_rejects_omitted_admission_and_heartbeat_jobs(tmp_path):
+    tree = RuntimeTree(tmp_path)
+    tree.install_due_event()
+    config = tree.data_root / "config/data_repo.toml"
+    config.write_text(config.read_text().replace("deployment_enabled = false", "deployment_enabled = true")
+        .replace("projected_odds_requests = 0", "projected_odds_requests = 4"))
+    result = tree.runtime().services.odds_budget_plan(season=2026, context=tree.context)
+    assert "WORKFLOW_JOB_GRAPH_PROJECTION_MISMATCH" in result["blockers"]
+
+
+@pytest.mark.parametrize(
+    ("zero_dollar_mode", "paid_minutes", "paid_storage"),
+    [(False, 0, 0), (False, 134, 0), (True, 134, 0), (True, 0, 1), (True, 0, 0)],
+)
+def test_runtime_dispatch_enforces_zero_cost_gates_before_http(
+    tmp_path: Path, zero_dollar_mode: bool, paid_minutes: int, paid_storage: int
+) -> None:
+    tree = RuntimeTree(tmp_path)
+    tree.install_due_event()
+    config_path = tree.data_root / "config/data_repo.toml"
+    config = config_path.read_text()
+    replacements = {
+        "deployment_enabled = false": "deployment_enabled = true",
+        "zero_dollar_mode = true": f"zero_dollar_mode = {str(zero_dollar_mode).lower()}",
+        "projected_odds_requests = 0": "projected_odds_requests = 4",
+        "private_due_ticks = 0": "private_due_ticks = 8",
+        "private_due_seconds_each = 15": "private_due_seconds_each = 121",
+        "full_forecast_workers = 0": "full_forecast_workers = 8",
+        "projected_github_billed_minutes = 0": "projected_github_billed_minutes = 134",
+        "projected_paid_actions_minutes = 0": f"projected_paid_actions_minutes = {paid_minutes}",
+        "verified_included_private_actions_minutes = 0":
+            f"verified_included_private_actions_minutes = {134 - paid_minutes}",
+        "projected_storage_bytes = 0": f"projected_storage_bytes = {paid_storage}",
+        "projected_paid_storage_bytes = 0": f"projected_paid_storage_bytes = {paid_storage}",
+    }
+    for old, new in replacements.items():
+        assert old in config
+        config = config.replace(old, new)
+    config = config.replace(
+        "[cost_projection]",
+        "[cost_projection]\nnonce_admission_jobs = 8\nnonce_admission_jobs_seconds_each = 15"
+        "\nbudget_admission_jobs = 16\nbudget_admission_jobs_seconds_each = 121"
+        "\nheartbeat_jobs = 10\nheartbeat_jobs_seconds_each = 121",
+    )
+    config_path.write_text(config)
+    client = RecordingDispatchClient()
+    runtime = runtime_module.build_production_runtime(
+        tree.base_config, tree.environment, lambda: NOW,
+        runtime_module.RuntimeClients(repository_dispatch_http_client=client),
+    )
+    plan = runtime.services.odds_budget_plan(season=2026, context=tree.context)
+    expected_blockers = []
+    if not zero_dollar_mode:
+        expected_blockers.append("ZERO_DOLLAR_MODE_DISABLED")
+    if paid_minutes or paid_storage:
+        expected_blockers.append("PROJECTED_PAID_USAGE_NONZERO")
+    assert plan["blockers"] == expected_blockers
+    assert plan["deployment_allowed"] is (not expected_blockers)
+    authorization = DispatchAuthorization("owner/private", "fixture-token")
+    if expected_blockers:
+        with pytest.raises(ValueError, match="deployment gates"):
+            runtime.services.dispatch_due(
+                dry_run=False, authorization=authorization, context=tree.context
+            )
+        assert client.calls == 0
+    else:
+        runtime.services.dispatch_due(
+            dry_run=False, authorization=authorization, context=tree.context
+        )
+        assert client.calls > 0

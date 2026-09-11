@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import shutil
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -148,6 +149,13 @@ class Repository:
             if kind == "attempt" and value.origin_run_id == origin_run_id
         ]
         return attempts[-1] if attempts else None
+
+    def root_attempt(self, origin_run_id: str):
+        return next((
+            value for kind, value in self.records
+            if kind == "attempt" and value.origin_run_id == origin_run_id
+            and value.retry_of_attempt_id is None
+        ), None)
 
     def append_attempt(self, attempt) -> None:
         self.records.append(("attempt", attempt))
@@ -2291,3 +2299,226 @@ def test_market_truth_is_recomputed_from_exact_unique_book_quotes(mutation: str)
     assert run is not None and run.status == "FOOTBALL_ONLY"
     assert "MARKET_EVALUATION_LINEAGE_INVALID" in run.reason_codes
     assert not any(kind == "comparator" for kind, _ in repository.records)
+
+
+def test_portable_terminal_evidence_survives_byte_identical_checkout(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    original, checkout = tmp_path / "original", tmp_path / "checkout"
+    item, clock, _, _, workflow, repository = _durable_workflow(original)
+    clock.set(item.window.target_at_utc)
+    run = workflow.run(item, "fixture", ForecastExecutionContext.live(clock()))
+    assert run is not None and run.status == "FOOTBALL_ONLY"
+    graph = repository.load_committed_graph(item.idempotency_key)
+    before = {p.relative_to(original): p.read_bytes() for p in original.rglob("*") if p.is_file()}
+    shutil.copytree(original, checkout)
+    assert all((checkout / name).read_bytes() == payload for name, payload in before.items())
+    real_stat = Path.stat
+    late = item.window.window_closes_at_utc + timedelta(days=1)
+
+    def restored_stat(path: Path, *args, **kwargs):
+        metadata = real_stat(path, *args, **kwargs)
+        if checkout in path.parents and path.parent.name == "forecast-terminal-receipt-prospective":
+            return SimpleNamespace(st_ctime_ns=int(late.timestamp()) * 1_000_000_000)
+        return metadata
+
+    monkeypatch.setattr(Path, "stat", restored_stat)
+    restored = forecast_module.DurableForecastRepository(
+        checkout,
+        "prospective",
+        artifact_resolver=repository.artifact_resolver,
+    )
+    assert restored.terminal_run(item.idempotency_key) == run
+    assert restored.load_committed_graph(item.idempotency_key) == graph
+    assert all((checkout / name).read_bytes() == payload for name, payload in before.items())
+
+
+@pytest.mark.parametrize("crash", [False, True])
+def test_receipt_durability_crossing_has_no_portable_success_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    crash: bool,
+) -> None:
+    item, clock, _, _, workflow, repository = _durable_workflow(tmp_path)
+    fsync = forecast_module.LedgerStore._fsync_directory
+    crossed = False
+
+    def delayed_fsync(directory: Path) -> None:
+        nonlocal crossed
+        fsync(directory)
+        if directory.name == "forecast-terminal-receipt-prospective" and not crossed:
+            crossed = True
+            clock.set(item.window.window_closes_at_utc + timedelta(microseconds=1))
+            if crash:
+                raise OSError("crash after receipt durability")
+
+    monkeypatch.setattr(
+        forecast_module.LedgerStore, "_fsync_directory", staticmethod(delayed_fsync)
+    )
+    clock.set(item.window.target_at_utc)
+    if crash:
+        with pytest.raises(OSError, match="crash after receipt durability"):
+            workflow.run(item, "fixture", ForecastExecutionContext.live(clock()))
+        assert repository.terminal_run(item.idempotency_key) is None
+        with pytest.raises(DataIntegrityError, match="not terminal"):
+            repository.load_committed_graph(item.idempotency_key)
+    run = workflow.run(item, "fixture", ForecastExecutionContext.live(clock()))
+    assert crossed
+    assert run is not None and run.status == "MISSED"
+    assert repository.load_committed_graph(item.idempotency_key).run == run
+
+
+@pytest.mark.parametrize("stage", ["before", "after", "delayed"])
+def test_portable_terminal_evidence_crash_and_later_persistence(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    stage: str,
+) -> None:
+    item, clock, required, _, workflow, repository = _durable_workflow(tmp_path)
+    append = repository.ledger.append
+    observed = False
+
+    def evidence_boundary(namespace, key, value):
+        nonlocal observed
+        if namespace == "forecast-terminal-evidence-prospective":
+            observed = True
+            clock.set(item.window.window_closes_at_utc + timedelta(seconds=1))
+            if stage == "before":
+                raise OSError("crash before evidence persistence")
+            result = append(namespace, key, value)
+            if stage == "after":
+                raise OSError("crash after evidence persistence")
+            return result
+        return append(namespace, key, value)
+
+    monkeypatch.setattr(repository.ledger, "append", evidence_boundary)
+    clock.set(item.window.target_at_utc)
+    if stage in {"before", "after"}:
+        with pytest.raises(OSError, match="evidence persistence"):
+            workflow.run(item, "fixture", ForecastExecutionContext.live(clock()))
+    else:
+        run = workflow.run(item, "fixture", ForecastExecutionContext.live(clock()))
+        assert run is not None and run.status == "FOOTBALL_ONLY"
+    assert observed
+    restored = forecast_module.DurableForecastRepository(
+        tmp_path,
+        "prospective",
+        artifact_resolver=repository.artifact_resolver,
+    )
+    monkeypatch.setattr(repository.ledger, "append", append)
+    if stage == "before":
+        assert restored.terminal_run(item.idempotency_key) is None
+        recovered = workflow.run(item, "fixture", ForecastExecutionContext.live(clock()))
+        assert recovered is not None and recovered.status == "MISSED"
+    else:
+        assert restored.load_committed_graph(item.idempotency_key).run.status == "FOOTBALL_ONLY"
+        recovered = workflow.run(item, "fixture", ForecastExecutionContext.live(clock()))
+        assert recovered is not None and recovered.status == "FOOTBALL_ONLY"
+    assert required.calls == 1
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing",
+        "incomplete",
+        "version",
+        "execution_key",
+        "run_content_sha256",
+        "receipt_content_sha256",
+        "receipt_published_at_utc",
+        "receipt_durable_at_utc",
+    ],
+)
+def test_portable_terminal_evidence_rejects_legacy_and_tampered_bindings(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    item, clock, _, _, workflow, repository = _durable_workflow(tmp_path)
+    clock.set(item.window.target_at_utc)
+    run = workflow.run(item, "fixture", ForecastExecutionContext.live(clock()))
+    assert run is not None and run.status == "FOOTBALL_ONLY"
+    namespace = "forecast-terminal-evidence-prospective"
+    digest = sha256(forecast_module.canonical_json_bytes(run)).hexdigest()
+    key = f"{item.idempotency_key}|{digest}"
+    evidence = repository.ledger.read(namespace, key)
+    assert evidence is not None
+    marker = repository.ledger.marker_path(namespace, key)
+    marker.unlink()
+    if mutation != "missing":
+        if mutation == "incomplete":
+            evidence.pop("receipt_durable_at_utc")
+        elif mutation == "version":
+            evidence["version"] = "unsupported"
+        elif mutation.endswith("_at_utc"):
+            evidence[mutation] = (
+                item.window.window_closes_at_utc + timedelta(seconds=1)
+            ).isoformat()
+        elif mutation.endswith("sha256"):
+            evidence[mutation] = "0" * 64
+        else:
+            evidence[mutation] = "another-execution"
+        repository.ledger.append(namespace, key, evidence)
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    if mutation == "missing" or mutation.endswith("_at_utc"):
+        assert repository.terminal_run(item.idempotency_key) is None
+    else:
+        with pytest.raises(DataIntegrityError):
+            repository.terminal_run(item.idempotency_key)
+    with pytest.raises(DataIntegrityError):
+        repository.load_committed_graph(item.idempotency_key)
+    if mutation == "missing":
+        # A legacy/restored receipt cannot manufacture an original publication observation.
+        with pytest.raises(DataIntegrityError):
+            workflow.run(item, "fixture", ForecastExecutionContext.live(clock()))
+        assert repository.ledger.read(namespace, key) is None
+    assert all(path.read_bytes() == payload for path, payload in before.items())
+
+
+@pytest.mark.parametrize("retry_outcome", ["success", "failed", "missed"])
+def test_interrupted_retry_preserves_root_start_after_time_advances(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, retry_outcome: str
+) -> None:
+    item, clock, required, _, workflow, _repository = _durable_workflow(
+        tmp_path, optional_mode="disabled"
+    )
+    original_capture = required.capture_live
+    root_start = item.window.target_at_utc
+    clock.set(root_start)
+
+    def interrupted(*args, **kwargs):
+        raise KeyboardInterrupt("simulated process interruption before capture")
+
+    monkeypatch.setattr(required, "capture_live", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        workflow.run(item, "fixture", ForecastExecutionContext.live(clock()))
+    monkeypatch.setattr(required, "capture_live", original_capture)
+    retry_start = (
+        item.window.window_closes_at_utc + timedelta(seconds=1)
+        if retry_outcome == "missed" else root_start + timedelta(seconds=1)
+    )
+    clock.set(retry_start)
+    required.received_at = retry_start
+    if retry_outcome == "failed":
+        def failed(*args, **kwargs):
+            raise ValueError("required capture unavailable")
+        monkeypatch.setattr(required, "capture_live", failed)
+    result = workflow.run(item, "fixture", ForecastExecutionContext.live(clock()))
+    expected = {"success": "FOOTBALL_ONLY", "failed": "FAILED", "missed": "MISSED"}
+    assert result.status == expected[retry_outcome]
+    reloaded = forecast_module.DurableForecastRepository(
+        tmp_path, "prospective", artifact_resolver=workflow.artifact_registry
+    )
+    graph = reloaded.load_committed_graph(item.idempotency_key)
+    assert graph.run == result
+    assert result.run_started_at_utc == root_start
+    assert len(graph.attempts) == 2
+    assert graph.attempts[0].safe_error_category == "INTERRUPTED_ATTEMPT"
+    assert graph.attempts[1].started_at_utc == retry_start
+    assert graph.attempts[1].retry_of_attempt_id == graph.attempts[0].attempt_id
+    if retry_outcome != "success":
+        assert not result.prediction_ids
+    markers = {path: path.read_bytes() for path in tmp_path.rglob("*.json")}
+    assert workflow.run(item, "fixture", ForecastExecutionContext.live(clock())) == result
+    assert {path: path.read_bytes() for path in tmp_path.rglob("*.json")} == markers
