@@ -53,6 +53,7 @@ def code_identity():
         "ops/season_live.py",
         "ops/season_sources.py",
         "ops/season_scoring.py",
+        "ops/season_analysis.py",
         "configs/season_live.toml",
         "configs/model_policy_v1.toml",
         "src/nfl_predictor/ratings/elo.py",
@@ -447,6 +448,11 @@ def run_once(cfg, root, *, clock=now, fetcher=None):
                     }
                 )
         rater, model = model_for_current_results(source["rows"], cfg, games, checked)
+        if cfg.get("analysis_enabled"):
+            policy_bytes = (CODE_ROOT / cfg["model_policy"]).read_bytes()
+            if digest(policy_bytes) != model["policy_sha256"]:
+                raise ValueError("EXPLANATION_MODEL_POLICY_HASH_MISMATCH")
+            model["elo_policy"] = tomllib.loads(policy_bytes.decode())["elo"]
         identity = code_identity()
         journal(
             root,
@@ -459,6 +465,7 @@ def run_once(cfg, root, *, clock=now, fetcher=None):
                         "ops/season_live.py",
                         "ops/season_sources.py",
                         "ops/season_scoring.py",
+                        "ops/season_analysis.py",
                         "configs/season_live.toml",
                         "configs/model_policy_v1.toml",
                         "src/nfl_predictor/ratings/elo.py",
@@ -551,6 +558,10 @@ def run_once(cfg, root, *, clock=now, fetcher=None):
                     "neutral_site": game["neutral_site"],
                     **identity,
                 }
+                if cfg.get("analysis_enabled"):
+                    from season_analysis import explain_forecast
+                    record["venue"] = game.get("venue")
+                    record["explanation"] = explain_forecast(record, model, generated)
                 deadline = (
                     origin_state(kick, origin, generated, cfg)[2]
                     if origin in cfg["origin_seconds"]
@@ -636,7 +647,22 @@ def run_once(cfg, root, *, clock=now, fetcher=None):
                 }
         replace_view(root / "improvement-index.json", improvements)
         view["improvement_log"] = improvements
-        if cfg.get("simulation_config"):
+        if cfg.get("postgame_enabled"):
+            try:
+                from season_postgame import refresh_postgame
+                view["postgame_evidence"] = refresh_postgame(view, root, cfg, clock)
+            except (ValueError, OSError, KeyError, TypeError) as error:
+                view["postgame_evidence"] = {}
+                view["postgame_status"] = {"status": "FAILED", "reason": str(error)}
+        if cfg.get("analysis_enabled"):
+            try:
+                from season_analysis import refresh_analysis
+                refresh_analysis(view, root, cfg, clock=clock(), evidence=view.get("postgame_evidence", {}))
+                view["analysis_status"] = {"status": "READY"}
+            except (ValueError, OSError, KeyError, TypeError) as error:
+                view["analysis"] = {}
+                view["analysis_status"] = {"status": "FAILED", "reason": str(error)}
+        if cfg.get("simulation_enabled", True) and cfg.get("simulation_config"):
             try:
                 from season_simulation import snapshot
                 view["simulation"] = snapshot(view, root, cfg["simulation_config"])

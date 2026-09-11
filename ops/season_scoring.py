@@ -190,6 +190,7 @@ def _score_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "games": len(rows),
         "forecasted": sum(row["prediction_id"] is not None for row in rows),
         "settled": len(settled),
+        "probability_score_sample_size": len(settled),
         "unresolved": sum(
             row["prediction_id"] is not None and row["result"] is None for row in rows
         ),
@@ -313,6 +314,44 @@ def _model_key(prediction: dict[str, Any]) -> str:
         or prediction.get("model_label")
         or "unknown"
     )
+
+
+def _revision_comparisons(games, clock):
+    """Compare earlier saved origins to official latest on identical finalized games."""
+    output = []
+    for horizon in (*ORIGINS, "EARLIEST"):
+        paired = []
+        for game in games:
+            kickoff = _optional_instant(game.get("kickoff"), "kickoff")
+            result = _result(_latest_outcome(game, clock))
+            if kickoff is None or result is None:
+                continue
+            selected = _latest_predictions(game, kickoff, clock)
+            latest = selected["official"]
+            eligible = [p for p in game.get("predictions", []) if _valid_prediction(p, game, kickoff, clock)]
+            earlier = min(eligible, key=_prediction_time) if horizon == "EARLIEST" and eligible else selected.get(horizon)
+            if earlier is None or latest is None or _prediction_time(earlier) >= _prediction_time(latest):
+                continue
+            before, after = _selected_metrics(earlier, result), _selected_metrics(latest, result)
+            paired.append({
+                "game_id": game["game_id"], "week": game["week"],
+                "earlier_prediction_id": _prediction_id(earlier), "official_prediction_id": _prediction_id(latest),
+                "earlier_model": _model_key(earlier), "official_model": _model_key(latest),
+                "earlier_brier": before["multiclass_brier"], "official_brier": after["multiclass_brier"],
+                "earlier_log_loss": before["multinomial_log_loss"], "official_log_loss": after["multinomial_log_loss"],
+            })
+        def aggregate(rows):
+            values = {"n": len(rows), "game_ids": [row["game_id"] for row in rows]}
+            for metric in ("brier", "log_loss"):
+                for phase in ("earlier", "official"):
+                    key = phase + "_" + metric
+                    values[key] = sum(row[key] for row in rows) / len(rows) if rows else None
+                values["delta_" + metric] = values["official_" + metric] - values["earlier_" + metric] if rows else None
+            return values
+        output.append({"from_horizon": horizon, "to_horizon": "official", **aggregate(paired),
+                       "pairs": paired, "by_week": {str(week): aggregate(rows) for week, rows in _group(paired, "week").items()},
+                       "interpretation": "Negative score change favors the later forecast; observational comparison, not causal attribution."})
+    return output
 
 
 def score_season(
@@ -465,6 +504,7 @@ def score_season(
         "weekly_horizons": weekly_horizons,
         "model_breakdowns": models,
         "matched_elo_comparisons": comparisons,
+        "revision_comparisons": _revision_comparisons(games, now),
         "games": per_game,
         "weekly_error_analysis": {
             week: weekly_error_analysis(rows) for week, rows in _group(per_game, "week").items()

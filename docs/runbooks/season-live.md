@@ -83,3 +83,56 @@ not apply unsupported injury or inactive probability adjustments.
 
 An end-to-end result regression verifies final → corrected final → retracted → restored final
 across view-cache loss, preserving the exact pregame forecast and all four outcome versions.
+
+
+## Readable dashboard and saved game analysis
+
+The existing loopback viewer serves `/`, `/performance`, and `/games/<game_id>`;
+`/api/games/<game_id>` returns the same saved analysis as the game page. Week selection
+keeps every scheduled game in coverage. Missing pregame forecasts are distinct from
+incorrect picks, pending outcomes, and ties. Large team probabilities retain the separate
+tie mass; model identity and input limitations remain visible. Detailed execution and
+capture records are expandable. The viewer does not publish private files or synthesize
+analysis when someone opens a page.
+
+With `analysis_enabled`, a new forecast embeds its explanation before the normal durable
+publication and kickoff checks. Verified Elo explanations reproduce the saved ratings,
+policy, venue adjustment and tie layer. They do not attribute changes to unused injuries,
+QBs or weather. Older forecasts require hash-verified preserved model/policy artifacts;
+reconstructed explanations carry their actual reconstruction time and never imply pregame
+publication. Missing proof produces an unavailable explanation, not invented reasoning.
+Forecast files and prior explanation records remain immutable.
+
+With `postgame_enabled`, finalized games obtain free ESPN summary evidence through the
+existing zero-cost source adapter. Event, teams, final score and outcome version must
+match. Raw captures and normalized evidence stay private. Optional missing statistics
+produce partial evidence; failures are visible. Successful source checks are separate
+from the original evidence capture time. Repeated unchanged summaries reuse evidence;
+corrected results or statistics retain new immutable versions. No synthetic results enter
+this pipeline. Scoring plays support factual descriptions, not causal injury or luck claims.
+
+Reviews include the frozen official prediction, its explanation reference, finalized result,
+three-way probability scores and evidence limitations. Wins and losses receive the same
+review process. A favorite losing does not alone establish a defect; the saved probability
+of the realized outcome is shown. Score/margin expectations are unavailable for this Elo
+model. Retracted results return to pending while preserving earlier review history.
+
+Improvement entries preserve game/forecast/review references, source availability,
+hypothesis, experiment dependencies, status, decision and rollback. Existing chronological
+candidate evaluations appear separately with their model/data/code versions, folds, matched
+results and rejection rationale. A game review never automatically changes a model.
+Unstarted context experiments remain explicitly unstarted: they require validated original
+pregame timestamps and predeclared untouched evaluation periods. Historical reconstructed
+backtests never count as live forecasts.
+
+The performance view reports accuracy and coverage separately, Brier/log loss with sample
+sizes, calibration, model-version records and T72/T60/FINAL scorecards. Revision comparisons
+pair each earlier horizon (and the earliest valid revision) with the official latest valid
+pregame forecast on exactly the same finalized games. Deltas are latest minus earlier;
+negative is better. Pending games and identical revisions are excluded. Later forecasts
+are never selected according to the outcome, and the deltas are observational rather than
+causal evidence. Week-level comparisons use their own matched sample.
+
+Betting and playoff simulation work is deferred. `simulation_enabled = false` pauses new
+simulation runs while preserving existing code and private snapshots. The season worker,
+two-hour input checks and protected pregame snapshot windows remain active.

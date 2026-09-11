@@ -38,3 +38,10 @@ calibration_bin_count = 10
 confident_review_threshold = 0.65
 
 simulation_config = "configs/season_simulation.toml"
+
+# Current milestone prioritizes forecasts and game analysis; keep saved simulations private.
+simulation_enabled = false
+analysis_enabled = true
+postgame_enabled = true
+postgame_refresh_seconds = 7200
+postgame_summary_url = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/summary?event={event_id}"

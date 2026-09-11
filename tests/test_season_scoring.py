@@ -168,3 +168,26 @@ def test_same_timestamp_retraction_uses_numeric_outcome_version():
         {'status':'UNRESOLVED','observed_at':clock.isoformat(),'version':10},
     ]}
     assert scoring._latest_outcome(game,clock) is None
+
+
+def test_revision_comparison_uses_same_final_games_and_keeps_worse_latest():
+    early = prediction("early", "2026-09-07T00:00:00Z", origin="T72", probabilities=(.8,.15,.05))
+    latest = prediction("latest", "2026-09-10T23:00:00Z", origin="T60", probabilities=(.3,.65,.05))
+    late = prediction("after-kick", "2026-09-11T01:00:00Z", probabilities=(.99,.005,.005))
+    report = scoring.score_season([game(predictions=[early,latest,late],outcomes=[final()]),game("no-earlier",predictions=[latest],outcomes=[final()]),game("pending",predictions=[early,latest])],CLOCK,POLICY)
+    pair = next(p for p in report["revision_comparisons"] if p["from_horizon"]=="T72")
+    assert pair["n"] == 1 and pair["game_ids"] == ["g1"]
+    assert pair["pairs"][0]["official_prediction_id"] == "latest"
+    assert pair["delta_brier"] > 0 and pair["delta_log_loss"] > 0
+    assert pair["by_week"]["1"]["n"] == 1
+
+
+def test_revision_comparison_includes_ties_and_retractions_remove_pairs():
+    forecasts=[prediction("early","2026-09-07T00:00:00Z",origin="T72",probabilities=(.7,.25,.05)),prediction("later","2026-09-10T23:00:00Z",probabilities=(.5,.4,.1))]
+    g=game(predictions=forecasts,outcomes=[final(scores=(20,20))])
+    report=scoring.score_season([g],CLOCK,POLICY)
+    pair=next(p for p in report["revision_comparisons"] if p["from_horizon"]=="T72")
+    assert pair["n"]==1 and pair["delta_log_loss"] == pytest.approx(-math.log(2))
+    g["outcomes"].append({"status":"UNRESOLVED","version":2,"observed_at":"2026-09-11T05:00:00Z"})
+    report=scoring.score_season([g],CLOCK,POLICY)
+    assert all(p["n"]==0 for p in report["revision_comparisons"])

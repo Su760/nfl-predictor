@@ -68,3 +68,34 @@ polling, retained T72/T60/FINAL windows, durable pregame publication, duplicate 
 actual kickoff changes, metadata-only venue changes, outcome corrections/retractions and
 numeric version ordering are tested. Earlier kicked-off games retain retrospective-policy flags.
 Original Week1 Elo forecasts are never relabeled as V2. Paid usage remains zero.
+
+## Readable forecast and analysis milestone — 2026-09-11
+
+Ruling: user's explicit implementation request authorizes this interface/analysis design and execution without another planning-only approval. Preserve prior work; betting/playoff simulations deferred. Existing simulation artifacts/code retained, automatic new simulations paused by config for this milestone.
+
+Design: existing Python HTTP stack, light cool-gray canvas #f3f6fa, white game rows, navy #142d4e text, blue #175cd3 and teal #087f8c probability segments, amber #b55b08 uncertainty. Large tabular probabilities/full team names; readable system sans; matchup-focused two-column desktop/single-column mobile, same real data. Game pages show saved explanation and postgame review before expandable audit details.
+
+Scope: ops/week1_viewer.py, ops/viewer/index.html, ops/viewer/app.js, ops/viewer/styles.css; ops/season_analysis.py, ops/season_postgame.py, ops/season_live.py, ops/season_scoring.py; configs/season_live.toml; tests/test_season_analysis.py, tests/test_season_postgame.py, tests/test_season_live.py, tests/test_season_scoring.py, tests/test_week1_viewer.py; docs/runbooks/season-live.md, tasks/todo.md, tasks/lessons.md. Root tasks bookkeeping only.
+
+- [x] Audit actual branch/API/artifacts: remote81c60e0, cleanV2, seasonElo fallback, workerhealthy, genuineSF@LA pregamerecord+final.
+- [x] Persist explanations with new forecasts; reconstruct old explanations only from preserved model/input evidence and label reconstruction time.
+- [x] Capture free sourced postgame summary/PBP where available; immutable review/scoring/improvement records, corrections and idempotency.
+- [x] Build readable responsive dashboard, clickable /games/<id>, performance view; model identity and tie probability explicit.
+- [x] Connect matched horizon update comparisons, candidate experiments and decisions; never outcome-select revisions or auto-promote.
+- [x] Verify realSF@LA flow, allgamecoverage, deadline/clock/corrections/duplicates, desktop/mobile/screenshots, meaningful regression suite.
+- [ ] Activate locally, verify URLs/worker, commit/push coherent V2 milestones, report exact full-model/data/hosting blockers.
+
+Status terms: implemented, tested, running locally and deployed are separate. Localhost is not clouddeployment.
+
+
+### Analysis milestone verification — 2026-09-11
+- Implemented: exact saved Elo explanations, prepublication embedding, labeled immutable reconstruction; official forecast reviews, sourced final-game statistics/scoring plays; immutable improvement and historical evaluation records.
+- Implemented: responsive game cards/details/performance, weekly navigation, tie mass, separate missing vs incorrect status, matched revision deltas and version records. No betting or new playoff simulation work.
+- Tested: full suite **1,187 passed**, no exclusions; changed-file Ruff clean. Includes schedule/kickoff cutoffs, stale input handling, publication durability, win/loss/tie/missing/corrected/retracted results, evidence identity/null source handling, immutable explanations and repeated report/evidence reuse.
+- Running locally: real SF@LA original pregame → finalized27–7 → frozen official probability scores → reconstructed explanation + sourced postgame review + observed hypothesis. No synthetic live results. Desktop1440 and mobile390 browser checks: correct game click, zero JS errors, no horizontal overflow on dashboard/detail/performance.
+- Running locally: season worker restarted with analysis integration; healthy heartbeat verified. Latest source check22:15Z; nextscheduled00:15Z. Existing two-hour input and candidate-evaluation cadence retained.
+- Still blocked: no reviewed full V2 champion package/registry or validated historical original pregame timestamps; EPA candidate worse than Elo. No matched live challenger scorecard yet. New context experiments await valid timestamped data and predeclared untouched periods.
+- Not cloud deployed: loopback viewer and launchd require this Mac awake/online; no verified zero-cost private persistent hosting/storage/authentication. Simulation code/history retained, new runs paused by config.
+- Source/UI commits and remote verification pending final packaging.
+
+Final checks: 272/272 live game-detail routes reconcile with scorecards; six isolated browser outcome states pass; weekly selector works; actual new ATL@PIT explanation is VERIFIED/PREGAME at generation; original SF@LA forecast hash unchanged. Desktop/mobile/dashboard/game/postgame/performance screenshots captured privately under /tmp. Fullsuite1,187passed, zeroexclusions, changedfileRuffclean.

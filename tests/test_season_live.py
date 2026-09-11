@@ -103,6 +103,8 @@ def fake_tick(monkeypatch, tmp_path, stale=False):
 
     cfg = tomllib.loads((Path(__file__).parents[1] / "configs/season_live.toml").read_text())
     cfg["legacy_data_root"] = str(tmp_path / "legacy")
+    cfg["analysis_enabled"] = False
+    cfg["postgame_enabled"] = False
     at = datetime(2030, 9, 10, tzinfo=UTC)
     kick = at + timedelta(days=2)
     policy = tomllib.loads(
@@ -274,3 +276,28 @@ def test_live_final_correction_retraction_restart_keeps_forecasts(tmp_path, monk
     assert [o["version"] for o in game["outcomes"]] == [1, 2, 3, 4]
     assert [o["status"] for o in game["outcomes"]] == ["FINAL", "FINAL", "UNRESOLVED", "FINAL"]
     assert restored["scorecards"]["summary"]["season"]["winner_accuracy_denominator"] == 1
+
+
+def test_new_forecast_carries_saved_explanation_and_never_rewrites_at_kickoff(tmp_path, monkeypatch):
+    import copy
+    cfg, at, fetcher = fake_tick(monkeypatch, tmp_path)
+    cfg["analysis_enabled"] = True
+    original_model = live.model_for_current_results
+    def model(*args):
+        rater, proof = original_model(*args)
+        proof.update(ratings=dict(rater.ratings), policy_sha256=live.digest((live.CODE_ROOT / cfg["model_policy"]).read_bytes()))
+        return rater, proof
+    monkeypatch.setattr(live,"model_for_current_results",model)
+    first=live.run_once(cfg,tmp_path,clock=lambda:at,fetcher=fetcher)
+    saved=copy.deepcopy(first["games"][0]["predictions"])
+    assert saved[0]["explanation"]["status"] == "VERIFIED"
+    assert saved[0]["explanation"]["provenance"] == "PREGAME"
+    assert saved[0]["explanation"]["created_at"] == saved[0]["generated_at"]
+    after=at+timedelta(days=2)
+    def changed(*args):
+        source=fetcher(*args)
+        for check in source["checks"].values(): check["captured_at"]=live.stamp(after)
+        source["games"][0]["inputs"]={"qb":{"status":"AVAILABLE","data":"new information at kickoff"}}
+        return source
+    second=live.run_once(cfg,tmp_path,clock=lambda:after,fetcher=changed)
+    assert second["games"][0]["predictions"] == saved
