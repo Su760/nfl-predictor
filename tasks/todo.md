@@ -186,3 +186,27 @@ Final verification:1264tests passed in20.83s, zero exclusions; changed-file Ruff
 Blocked: reviewed champion registry, original historical expected-starter availability receipts,
 sufficient positive prospective evidence, unavailable current inputs/stats for individual games,
 verified zero-dollar persistent private cloud host. No paid services enabled. Betting/playoffs deferred.
+
+
+## Final live operation check — September13,11:48CDT
+Source milestone f823ba78462be4fb97b9742ea34f41d70667ef32 is pushed to V2; remote matches,
+worktree clean at verification. Actual11:46:05CDT source/forecast cycle succeeded, next11:51:05;
+348calibration revisions across29games and100QB revisions across10games, prospective settledN0.
+Week1official record0/1correct,14pending,15/16coverage remains unchanged. Paidusage0.
+
+Operational limitation observed, not hidden: eight noon games missed T60. Worker log scheduled
+16:00UTC but next completed at16:12:15UTC, outside the10minute horizon window. macOS power
+logs show sleep across that interval (11:01:34–11:11:10CDT, plus earlier maintenance sleep).
+No caffeinate process/assertion existed. Existing pregame forecasts remain valid; no later
+revision was relabeled T60. FINAL snapshots remain scheduled before noon kickoff.
+
+Local mitigation installed in the existing private LaunchAgent:
+~/Library/LaunchAgents/com.su760.nfl-season-worker.plist ProgramArguments now wrap the
+existing Python command with /usr/bin/caffeinate -i. Original plist is preserved privately
+under season/operation-backups/100437337…plist. LaunchAgent reloaded; initial bootstrap
+returned input/output error during unload, retry succeeded after service removal. launchctl
+reports running; pmset confirms the worker-specific PreventUserIdleSystemSleep assertion.
+WorkerPID54635/guardPID54636, healthy11:48:40CDT. This prevents idle sleep only; closed-lid,
+shutdown, network loss and unavailable private always-on hosting remain real dependencies.
+It does not recover missed windows or weaken kickoff deadlines. Rollback is the preserved
+plist followed by bootout/bootstrap of the same label; no global power settings were changed.
