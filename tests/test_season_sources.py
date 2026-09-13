@@ -253,3 +253,49 @@ def test_official_inactive_links_reject_other_hosts_and_older_report_cannot_repl
     monkeypatch.setattr(season_sources,"_fetch",fetch)
     matched,_ = season_sources._inactives(landing,{"maximum_inactive_articles":32,"maximum_inactive_publication_age_seconds":259200},tmp_path,lambda:datetime(2026,9,10,23,31,tzinfo=UTC),[_inactive_game()])
     assert matched["game-1"][1]["source_updated_at"] == "2026-09-10T23:30:00Z"
+
+
+def test_saved_input_retains_raw_capture_identity():
+    check = season_sources._status({"captured_at": "2030-09-01T00:00:00Z", "source_last_modified": None, "raw_sha256": "a" * 64, "source_url": "https://example.invalid/depth"}, "AVAILABLE")
+    saved = season_sources._input(check, {"ATL": {"gsis_id": "player-1"}})
+    assert saved["raw_sha256"] == "a" * 64
+    assert saved["source_url"] == "https://example.invalid/depth"
+    assert saved["source_updated_at"] is None
+    assert saved["used_by_model"] is False
+
+
+def test_fetch_failure_is_preserved_separately_from_missing_report(tmp_path, monkeypatch):
+    clock = datetime(2030, 9, 1, tzinfo=UTC)
+    cfg = {"zero_dollar_mode": True, "allow_paid_usage": False, "season": 2030,
+        "source_url": "history", "scoreboard_url": "score", "injuries_url": "injury",
+        "inactives_url": "inactive", "depth_url": "depth", "maximum_capture_age_seconds": 7200}
+    def fetch(url, *args):
+        if url not in {"history", "score"}:
+            raise TimeoutError("source timed out")
+        return b"season\n2030\n", {"captured_at": clock.isoformat(), "source_last_modified": None,
+                                  "raw_sha256": "a" * 64, "source_url": url}
+    games = [{"game_id": f"game-{i}", "home": f"H{i}", "away": f"A{i}", "week": 1,
+              "weather": None, "result": None} for i in range(16)]
+    monkeypatch.setattr(season_sources, "_fetch", fetch)
+    monkeypatch.setattr(season_sources, "_games", lambda *args: games)
+    out = season_sources.fetch_sources(cfg, tmp_path, lambda: clock)
+    for name in ("injuries", "inactives", "expected_qb"):
+        item = out["games"][0]["inputs"][name]
+        assert item["fetch_failed"] is True
+        assert item["source_check_reason"] == "TimeoutError: source timed out"
+        assert item["used_by_model"] is False
+
+
+def test_depth_alternatives_preserve_same_capture_without_starter_weights():
+    rows = [
+        {"dt": "2030-09-01T00:00:00Z", "team": "PIT", "pos_abb": "QB", "pos_rank": 1, "player_name": "Starter", "espn_id": "1", "gsis_id": "s"},
+        {"dt": "2030-09-01T00:00:00Z", "team": "PIT", "pos_abb": "QB", "pos_rank": 2, "player_name": "Backup", "espn_id": "2", "gsis_id": "b"},
+        {"dt": "2030-08-31T00:00:00Z", "team": "PIT", "pos_abb": "QB", "pos_rank": 2, "player_name": "Old Backup", "espn_id": "3", "gsis_id": "old"},
+    ]
+    buffer = io.BytesIO()
+    season_sources.pl.DataFrame(rows).write_parquet(buffer)
+    receipt = {"captured_at": "2030-09-01T00:01:00Z", "source_last_modified": None, "raw_sha256": "a" * 64}
+    data, check = season_sources._depth(buffer.getvalue(), receipt, {"maximum_depth_age_seconds": 7200}, datetime(2030, 9, 1, 0, 1, tzinfo=UTC))
+    assert check["status"] == "AVAILABLE"
+    assert data["PIT"]["player_name"] == "Starter"
+    assert data["PIT"]["alternatives"] == [{"player_name": "Backup", "espn_id": "2", "gsis_id": "b", "depth_rank": 2}]

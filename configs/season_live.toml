@@ -1,3 +1,4 @@
+invalid_epa_dataset_sha256 = ["cc3e143000401b75ddaa3d5f923bbd9fd4a2ea74309059c7f2217916841a2fae"]
 season = 2026
 history_start = 2016
 history_end = 2025
@@ -45,3 +46,28 @@ analysis_enabled = true
 postgame_enabled = true
 postgame_refresh_seconds = 7200
 postgame_summary_url = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/summary?event={event_id}"
+
+# Prospectively archived challenger evidence; no automatic production promotion.
+shadow_enabled = true
+
+[[shadow_models]]
+name = "elo-calibration-fa15c047"
+kind = "calibration"
+artifact_path = "~/nfl-predictor-live-data/probability/artifacts/fa15c0472a2b6c101b28d063a029789a214bcc9a422c4bf327ba39eb4c5329d7.json"
+artifact_sha256 = "fa15c0472a2b6c101b28d063a029789a214bcc9a422c4bf327ba39eb4c5329d7"
+prospective_start = "2026-09-13T04:45:36.876103Z"
+evaluation_path = "~/nfl-predictor-live-data/probability/reports/4983130017770c3b1c0c77075586e328d49528158135773074805bbf3fa08aef.json"
+evaluation_sha256 = "4983130017770c3b1c0c77075586e328d49528158135773074805bbf3fa08aef"
+
+[[shadow_models]]
+name = "qb-residual-cdeab16a"
+kind = "qb"
+artifact_path = "~/nfl-predictor-live-data/probability/qb/corrected-v2/research/qb/artifacts/edce0619fe12af9129e378ae76d566a9ebda6b04a02302926d9eb71a3a7fd688.json"
+artifact_sha256 = "cdeab16a5aa58af520a07bcfd78cd6ebf20a54463a6d2809c89a65f89ad1d03b"
+prospective_start = "2026-09-13T06:08:14.196349Z"
+evaluation_path = "~/nfl-predictor-live-data/probability/qb/corrected-v2/reports/ff8c02be39e30e309217c5b5e73992dc488bacac370a0ec1a34a0b4ff6bf9a10.json"
+evaluation_sha256 = "ff8c02be39e30e309217c5b5e73992dc488bacac370a0ec1a34a0b4ff6bf9a10"
+runtime_config_path = "configs/season_qb.toml"
+runtime_config_sha256 = "6e146c3e911f08f24799787a5342456fcd0d4ebc307918dd50c5ffbe6ddc007b"
+history_source_path = "~/nfl-predictor-live-data/season/raw/84c97fa347ba04f283e32d16f4552f65dd1cb3abdf6f0dc9f1e5dee2ccb04cb5.csv"
+history_source_sha256 = "84c97fa347ba04f283e32d16f4552f65dd1cb3abdf6f0dc9f1e5dee2ccb04cb5"

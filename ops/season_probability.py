@@ -636,6 +636,97 @@ def evaluate(freeze_path, cfg_path=None):
     return result
 
 
+def compare_saved_candidates(candidate_specs, cfg, root, references=None):
+    """Compare immutable saved predictions on an outcome-independent intersection."""
+    if "production_elo" not in candidate_specs or len(candidate_specs) < 2:
+        raise ValueError("PRODUCTION_AND_CANDIDATE_REQUIRED")
+    root = Path(root)
+    indexed, sources = {}, {}
+    for name, spec in candidate_specs.items():
+        path = Path(spec["path"]).expanduser()
+        raw = path.read_bytes()
+        if digest(raw) != spec["sha256"]:
+            raise ValueError("COMPARISON_ROWS_HASH_MISMATCH")
+        rows = [json.loads(line) for line in raw.splitlines() if line.strip()]
+        selected = [
+            r
+            for r in rows
+            if r["horizon"] == cfg["primary_horizon"]
+            and r["season"] in {cfg["validation_season"], cfg["known_benchmark_season"]}
+        ]
+        index = {(r["game_id"], r["horizon"]): r for r in selected}
+        if len(index) != len(selected):
+            raise ValueError("COMPARISON_DUPLICATE_GAME_HORIZON")
+        indexed[name] = index
+        sources[name] = {**spec, "path": str(path), "input_rows": len(rows)}
+    periods = {}
+    for label, season in (
+        ("validation", cfg["validation_season"]),
+        ("known_benchmark", cfg["known_benchmark_season"]),
+    ):
+        keys = {
+            name: {key for key, row in index.items() if row["season"] == season}
+            for name, index in indexed.items()
+        }
+        common = sorted(set.intersection(*keys.values()))
+        baseline = [indexed["production_elo"][key] for key in common]
+        for key in common:
+            before = indexed["production_elo"][key]
+            for index in indexed.values():
+                after = index[key]
+                for field in ("season", "week", "kickoff", "cutoff", "home", "away", "result"):
+                    if before[field] != after[field]:
+                        raise ValueError("COMPARISON_GAME_CONTEXT_MISMATCH")
+        periods[label] = {
+            "season": season,
+            "horizon": cfg["primary_horizon"],
+            "n": len(common),
+            "game_ids": [key[0] for key in common],
+            "coverage": {
+                name: {
+                    "available": len(values),
+                    "matched": len(common),
+                    "excluded_game_ids": sorted(key[0] for key in values - set(common)),
+                }
+                for name, values in keys.items()
+            },
+            "models": {
+                name: {
+                    "metrics": metrics([index[key] for key in common], cfg),
+                    "paired_vs_production": paired_uncertainty(
+                        baseline, [index[key] for key in common], cfg
+                    ),
+                }
+                for name, index in indexed.items()
+            },
+        }
+    bundle_path = _object(root, "source-versions", _source_bundle())
+    report = {
+        "schema_version": "saved-candidate-comparison-v1",
+        "sources": sources,
+        "references": references or {},
+        "comparison_config": cfg,
+        "comparison_config_sha256": digest(canonical(cfg)),
+        "periods": periods,
+        "source_bundle_path": str(bundle_path),
+        "source_bundle_sha256": bundle_path.stem,
+        "period_roles": _period_roles(),
+        "evidence_grade": "C",
+        "production_change": "NONE",
+        "fitting_performed": False,
+        "selection_performed": False,
+        "promotion_eligible": False,
+        "limitations": [
+            "The intersection is restricted to games covered by every candidate; it is not all-game performance.",
+            "QB historical identity uses retrospective actual starters, not original expected-starter evidence.",
+            "2024 was used for calibration selection; 2025 is a previously inspected known benchmark.",
+            "No candidate is selected or promoted by this comparison.",
+        ],
+    }
+    report_path = _object(root, "matched-comparisons", report)
+    return {"report_path": str(report_path), "report_sha256": report_path.stem, "periods": periods}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("command", choices=("export-baseline", "evaluate"))

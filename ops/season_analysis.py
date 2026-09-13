@@ -179,13 +179,18 @@ def _experiments(root, cfg):
     report = research / "reports" / "v2-challenger-2025.json"
     if not paths and report.exists():
         paths = [report]
+    paths += sorted((research / "repairs" / "epa-team-plays-v3").glob("*/evaluations/records/*.json"))
     result = []
     for path in paths:
         raw = _read(path)
         if path.parent.name == "records" and digest(canonical(raw)) != path.stem:
             raise ValueError("EXPERIMENT_HASH_MISMATCH")
+        defective = raw.get("experiment", {}).get("dataset_sha256") in cfg.get("invalid_epa_dataset_sha256", [])
         result.append(
             {
+                "input_quality": "KNOWN_EPA_SELECTION_DEFECT" if defective else "See saved experiment provenance",
+                "input_quality_detail": "Legacy selection excluded all rushing plays and duplicated passing EPA as offensive EPA; preserve results but do not use them as evidence for promotion." if defective else None,
+                "evaluation_period_status": raw.get("evaluation_period_status", "Retrospective historical evaluation; not a live record"),
                 "experiment_id": digest(canonical(raw)),
                 "scope": "HISTORICAL_EXPERIMENT",
                 "relationship": "Related global evaluation; not a causal explanation or repair for this game.",
@@ -213,6 +218,8 @@ def _experiments(root, cfg):
                 "pregame_availability": "Historical reconstruction, Grade C; original pregame availability is not established.",
                 "rollback": "Keep the saved live Elo model; no candidate was automatically adopted.",
                 "rejection_rationale": (
+                    "Known legacy EPA input defect; corrected reconstruction is a separate experiment. Historical timestamp provenance also blocks promotion."
+                    if defective else
                     "EPA holdout log loss is worse than Elo; historical reconstruction is ineligible for live promotion."
                     if raw.get("models", {}).get("epa_logistic", {}).get("multinomial_log_loss", 0)
                     > raw.get("models", {}).get("elo", {}).get("multinomial_log_loss", float("inf"))

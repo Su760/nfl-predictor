@@ -340,6 +340,24 @@ def next_check(games, clock, cfg):
     return stamp(min(candidates))
 
 
+def forecast_check(previous, games, checked):
+    prior = {g["game_id"]: g for g in previous.get("games", [])}
+    changed = new_coverage = saved = 0
+    for game in games:
+        old = prior.get(game["game_id"], {})
+        known = {p.get("revision_id") for p in old.get("predictions", [])}
+        saved += sum(p.get("revision_id") not in known for p in game.get("predictions", []))
+        a, b = old.get("prediction"), game.get("prediction")
+        if b and not a:
+            new_coverage += 1
+        elif a and b and any(a[k] != b[k] for k in ("p_home", "p_away", "p_tie")):
+            changed += 1
+    return {"checked_at": stamp(checked), "new_saved_revisions": saved,
+            "games_with_changed_probabilities": changed, "new_forecast_coverage": new_coverage,
+            "explanation": "Production probabilities unchanged; source checks or context snapshots can update without a probability adjustment."
+            if not changed and not new_coverage else "New forecast coverage or changed production probabilities recorded; see saved game history."}
+
+
 def run_once(cfg, root, *, clock=now, fetcher=None):
     from season_scoring import score_season
     from season_sources import fetch_sources
@@ -600,6 +618,21 @@ def run_once(cfg, root, *, clock=now, fetcher=None):
                 (r["generated_at"] for g in games for r in g["predictions"]), default=None
             ),
             "model": model,
+            "forecast_check": forecast_check(previous, games, checked),
+            "probability_audit": {
+                "parameter_origin": "Fixed Elo policy defaults; team ratings and smoothed historical tie frequency are learned from past finalized results. No production calibration.",
+                "elo_policy": model.get("elo_policy", {}),
+                "history_start": cfg["history_start"], "history_end": cfg["history_end"],
+                "history_games": model.get("history_games"),
+                "current_final_results": model.get("current_final_results", []),
+                "p_tie": model["p_tie"],
+                "used": ["past finalized scores", "team identity", "offseason regression", "home or neutral venue", "historical tie frequency"],
+                "collected_not_used": ["expected QB", "injuries", "inactives", "weather"],
+                "conditional_home_formula": "1 / (1 + 10 ** (-(home_rating - away_rating + venue_points) / logistic_scale))",
+                "three_way_formula": "home=q*(1-tie); away=(1-q)*(1-tie); tie=(historical_regular_ties+0.5)/(historical_regular_games+1)",
+                "rating_update_formula": "K * log(max(abs(margin),1)+1) * mov_denominator/(winner_rating_difference*mov_rating_scale+mov_denominator) * (actual-q)",
+                "offseason_formula": "initial + (rating-initial)*offseason_retention",
+            },
             "worker_status": "HEALTHY",
             "full_v2_status": "BLOCKED: registry, reviewed artifacts, PIT dataset absent",
             "paid_usage": 0,
@@ -662,6 +695,12 @@ def run_once(cfg, root, *, clock=now, fetcher=None):
             except (ValueError, OSError, KeyError, TypeError) as error:
                 view["analysis"] = {}
                 view["analysis_status"] = {"status": "FAILED", "reason": str(error)}
+        if cfg.get("shadow_enabled"):
+            try:
+                from season_shadow import run_shadow
+                view["shadow"] = run_shadow(view, root, cfg, clock)
+            except (ValueError, OSError, KeyError, TypeError) as error:
+                view["shadow"] = {"status": "FAILED", "reason": str(error), "production_change": "NONE"}
         if cfg.get("simulation_enabled", True) and cfg.get("simulation_config"):
             try:
                 from season_simulation import snapshot

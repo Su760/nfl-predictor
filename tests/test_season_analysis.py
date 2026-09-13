@@ -250,3 +250,20 @@ def test_historical_experiment_is_measured_rejected_and_immutable(tmp_path):
     assert experiment["production_change"] == "NONE"
     assert "not a causal" in experiment["relationship"]
     assert len(list((tmp_path / "analysis/historical-improvements").glob("*.json"))) == 1
+
+
+def test_known_bad_epa_dataset_labeled_and_repaired_experiment_separate(tmp_path):
+    root = tmp_path / "research"
+    old = {"experiment": {"dataset_sha256": "known-bad"}, "models": {}, "promotion_eligible": False}
+    new = {"experiment": {"dataset_sha256": "repaired"}, "models": {}, "promotion_eligible": False, "evaluation_period_status": "KNOWN_BENCHMARK"}
+    for directory, report in [(root / "evaluations/records", old), (root / "repairs/epa-team-plays-v3/code/evaluations/records", new)]:
+        directory.mkdir(parents=True)
+        (directory / (digest(canonical(report)) + ".json")).write_bytes(canonical(report))
+    cfg = {"legacy_data_root": str(tmp_path), "invalid_epa_dataset_sha256": ["known-bad"]}
+    reports = analysis._experiments(tmp_path, cfg)
+    assert len(reports) == 2
+    assert reports[0]["input_quality"] == "KNOWN_EPA_SELECTION_DEFECT"
+    assert "separate experiment" in reports[0]["rejection_rationale"]
+    assert reports[1]["input_quality"] != "KNOWN_EPA_SELECTION_DEFECT"
+    assert reports[1]["evaluation_period_status"] == "KNOWN_BENCHMARK"
+    assert all(x["production_change"] == "NONE" for x in reports)

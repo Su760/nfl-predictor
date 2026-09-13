@@ -301,3 +301,16 @@ def test_new_forecast_carries_saved_explanation_and_never_rewrites_at_kickoff(tm
         return source
     second=live.run_once(cfg,tmp_path,clock=lambda:after,fetcher=changed)
     assert second["games"][0]["predictions"] == saved
+
+
+def test_source_check_distinguishes_context_revision_from_probability_change():
+    at = datetime(2030, 9, 1, tzinfo=UTC)
+    p = {"revision_id": "a", "p_home": .6, "p_away": .39, "p_tie": .01}
+    old = {"games": [{"game_id": "g", "prediction": p, "predictions": [p]}]}
+    q = {**p, "revision_id": "b"}
+    games = [{"game_id": "g", "prediction": q, "predictions": [p,q]}]
+    result = live.forecast_check(old, games, at)
+    assert result["new_saved_revisions"] == 1
+    assert result["games_with_changed_probabilities"] == 0
+    q["p_home"],q["p_away"] = .55,.44
+    assert live.forecast_check(old, games, at)["games_with_changed_probabilities"] == 1

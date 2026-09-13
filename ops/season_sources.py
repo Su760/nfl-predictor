@@ -153,6 +153,7 @@ def _status(
         "captured_at": receipt["captured_at"],
         "source_updated_at": receipt["source_last_modified"],
         "raw_sha256": receipt["raw_sha256"],
+        "source_url": receipt.get("source_url"),
         **extra,
     }
 
@@ -539,6 +540,14 @@ def _depth(
             "player_name": row["player_name"],
             "espn_id": row["espn_id"],
             "gsis_id": row["gsis_id"],
+            "alternatives": [
+                {"player_name": alternate["player_name"], "espn_id": alternate["espn_id"],
+                 "gsis_id": alternate["gsis_id"], "depth_rank": alternate["pos_rank"]}
+                for alternate in frame.filter(
+                    (pl.col("dt") == latest) & (pl.col("pos_abb") == "QB")
+                    & (pl.col("team") == row["team"]) & (pl.col("pos_rank") > 1)
+                ).sort("pos_rank").iter_rows(named=True)
+            ],
         }
     status = "AVAILABLE" if age <= cfg["maximum_depth_age_seconds"] else "STALE"
     reason = None if status == "AVAILABLE" else "DEPTH_CAPTURE_TOO_OLD"
@@ -562,6 +571,8 @@ def _input(check: dict[str, Any], data: Any) -> dict[str, Any]:
         "reason": check.get("reason"),
         "data": data,
         "used_by_model": False,
+        "raw_sha256": check.get("raw_sha256"),
+        "source_url": check.get("source_url"),
     }
 
 
@@ -672,7 +683,7 @@ def fetch_sources(cfg: dict[str, Any], root: Path, clock) -> dict[str, Any]:
             "injuries": _input(
                 game_injury_check,
                 [
-                    item
+                    {**item, "team": team}
                     for team in (game["home"], game["away"])
                     for item in (reports.get(team) or [])
                 ]
@@ -699,6 +710,11 @@ def fetch_sources(cfg: dict[str, Any], root: Path, clock) -> dict[str, Any]:
             ),
             "weather": _input(weather_check, game["weather"]),
         }
+        for input_name, source_name in (("expected_qb", "depth"), ("injuries", "injuries"), ("inactives", "inactives")):
+            source_check = checks[source_name]
+            inputs[input_name]["source_check_status"] = source_check["status"]
+            inputs[input_name]["source_check_reason"] = source_check.get("reason")
+            inputs[input_name]["fetch_failed"] = source_name + "_url" in optional_errors
         game["inputs"] = inputs
         per_game[game["game_id"]] = inputs
     teams = {game[side] for game in games for side in ("home", "away")}

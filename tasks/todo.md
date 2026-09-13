@@ -103,3 +103,86 @@ Final checks: 272/272 live game-detail routes reconcile with scorecards; six iso
 
 Delivered URLs (local only): http://127.0.0.1:8510/ ; http://127.0.0.1:8510/games/2026_01_SF_LA ; http://127.0.0.1:8510/performance .
 Source milestone: https://github.com/Su760/nfl-predictor/commit/bbf052ec810ef603ded33ee715a44fe9af77d3fb . No credentials, private captures, DBs or screenshots staged. Accepted unchanged legacy lint exception preserved. The final source test run passed1,187; no skipped/excluded regression tests. All requested unblocked interface/analysis work is implemented, tested and running locally; full V2 promotion and cloud deployment remain explicitly blocked above.
+
+
+## Probability improvement continuation — 2026-09-12
+Continue the existing blocked context/model evaluation tasks; no replacement infrastructure.
+User explicitly authorizes implementation and V2 push. Production Elo identity/policy and
+original records stay unchanged; challenger forecasts remain shadow/research with no promotion.
+2025 was inspected: it is a known benchmark, never again called untouched. Freeze experiment
+config before evaluating; development <=2023, validation2024, known benchmark2025;
+prospective eligible future2026 forecasts generated after this experiment freeze are untouched.
+Never substitute eventual target starters for historical expected-starter availability evidence.
+
+Scope: ops/season_live.py, ops/season_sources.py, ops/season_scoring.py, ops/season_analysis.py;
+new ops/season_probability.py, ops/season_qb.py, ops/season_shadow.py;
+new configs/season_probability.toml; configs/season_live.toml;
+ops/viewer/app.js, ops/viewer/styles.css; corresponding tests/test_season_probability.py,
+tests/test_season_qb.py, tests/test_season_shadow.py, tests/test_season_live.py,
+tests/test_season_sources.py, tests/test_season_scoring.py, tests/test_week1_viewer.py;
+docs/runbooks/season-live.md, tasks/todo.md, tasks/lessons.md. Root task bookkeeping only.
+
+- [x] Verify clean V2 at4d90616 and live healthy heartbeat03:47Z Sep13; next04:01Z; actual upcoming14Week1games and retainedSFfinalreview.
+- [x] Audit/reproduce fixed production Elo; evaluate tuning/calibration on declared chronological periods, matched metrics/uncertainty; inspect EPA failure.
+- [x] Audit timestamped QB evidence, fit minimal residual QB challenger when supported; archive prospective evidence now; historical eventual starter use research-only.
+- [x] Integrate immutable pregame shadow predictions and independent scorecards/reviews, missing/conflicting QB fallback explicit, no official selection change.
+- [x] Focus UI: scored sample alongsideaccuracy; distinguish notpublished/fetchfailed/stale/unused; lastcheck vs savedforecast and nochange explanation.
+- [x] Verify real lifecycle and baseline/challenger example; full meaningful regressions, localactivation, coherent V2 commits/push and exact blockers.
+
+Interface review: probability evaluator owns frozen config+private evaluation artifacts; QB module owns player evidence/model and conditional calculation; root shadow runtime consumes both after validation, never alters production policy. UI consumes existing fields plus root shadow status; no forecast writes. Tests stay separated by module. QB conflict observed ATLdepthTagovailoa vs injuryOut must remain unresolved, not a weighted guess. No architecture conflict identified; shared runtime edits owned only by root.
+
+
+### EPA audit correction, within probability-improvement scope
+Confirmed root cause: ops/season_rebuild.py globalqb_epa/cpoe nonnull gate removesallrushes;
+normalizer runtime/capture.py also globallyrequiresQBmetrics. 2025raw48,771plays/15,347rushes
+becomes17,490passes/0rushes; all2593cachedrows haveoff_diff==pass_diff andrush_diff==0.
+OldElo comparator is a fitted logistic Elo-difference baseline, notexactliveformula.
+Expand edit scope to ops/season_rebuild.py, src/nfl_predictor/runtime/capture.py,
+tests/test_season_rebuild.py, tests/runtime/test_capture.py. This repairs the existing
+requested EPA evaluation integrity, not a new featuregroup. Preserveoldprivatecached
+selections/datasets/reports in their namespace; newselection/dataidentity only. Separate
+team EPA eligibility from QB observation eligibility; neverzero-impute missingQBstats.
+Regressionmixedpass/rush/nullQBmetrics plus leakage/captureguards required. Evaluate new
+EPA results only as research with2025knownbenchmark; no promotion or retroactive overwrite.
+- [x] Repair/review/testEPA source selection andnormalization; preserveoldcache; reportnewdataquality/metrics ifunblocked.
+
+
+Probability continuation progress Sep13 continuation: EPArepair implemented/reviewed/tested (67focused; fullsuite1213pass) and pushed b72556e. Corrected2593-row private rebuild is running separately; outputs not yet evaluated; originaldataset/report retained. UIinputstatus/sampleN changes implemented/tested and servedlocally. Shadow immutablepublication/pairedscoring implemented/tested; prospectiveinputcapture running, actualmodels pendingactivation. Scope adds configs/season_qb.toml for separate QBhyperparameterfreeze beforeQBfit; Elofreeze remains unchanged. Production policy unchanged.
+
+Improvement-view audit task: label verified defective legacy EPA dataset by configured content hash, retain its result, load corrected immutable experiments separately; regression test before local activation.
+
+
+Probability milestones verified Sep13: EPA sourcefix b72556ecbc805a1f6f39aacf9a174cad3ac71102
+and chronological evaluator840c141 are committed/pushed toV2. Evaluator15tests/Ruffpass.
+CorrectedEPA build/evaluation COMPLETE2593rows/265benchmarkgames; original3artifacthashes
+unchanged; EPA stillworse0.703729vsfittedElo0.661164. No researchjobs remain forEPA.
+Calibration SHADOW-RUNNING locally:29prospectiveforecasts04:45:52Z, independentN0scorecard,
+nooriginal573productionfilechanges; actual desktop1440/mobile390dashboard/detail/performance
+verified0JSerrors/nooverflow. Workerreloadedpid63892,healthy05:24:56Z,next06:45:52Z.
+QBimplementation/alignment/tests/realfit/stateintegration still IN PROGRESS; not promoted
+and noQBforecast claimed. Pending finalintegration/fullsuite/secondsourcecommit/ledgerclosure.
+
+
+Sep13 QB review continuation: extend existing experiment scope to ops/season_qb_experiment.py
+and tests/test_season_qb_experiment.py for a reproducible archived-input CLI, not a new plan.
+QB fitting excludes ties from the conditional likelihood while retaining ties in proper scores.
+Duplicate player/game observations and nonfinite EPA fail closed; historical state starts2016,
+strict final availability remains before each cutoff. Uncertain starters yield unweighted
+conditional scenarios, separate immutable publication and no scorecard inclusion. Fullsuite
+1257passed without exclusions before final CLI/integration; 45focused tests pass after saved
+feature-value evidence added. Original573productionfiles remain hash-identical.
+
+
+Probability milestone implemented/tested/running locally: calibrated Elo and corrected QB
+shadow records, independent scorecards, immutable conditional scenarios, exact saved features,
+free-source refresh and missing-input guards. First10QB forecasts06:08Z; latest06:27Z
+20QB revisions/10games and116calibration revisions/29games; finalized shadow sample0.
+Original573productionfiles unchanged. RealSF@LA pregame→final→score→review remains retained;
+Week1coverage15/16,0/1correct,14pending,1missing. No backfills or production model promotion.
+Actual desktop/mobile clickthrough/probabilities/conditional uncertainty verified. QB CLI
+repeated-run reuse verified, all1850reproduced probabilities exact; corrected QB loses on
+matched2024/2025 periods. Exact metrics/artifacts/reproduction in docs/runbooks/season-live.md.
+Final verification:1264tests passed in20.83s, zero exclusions; changed-file Ruff and git diff--check clean. Saved baseline and QB probabilities reproduced with zero error. Source milestone includes this ledger; commit/push verified separately after staging only the declared source/config/docs/tests. No secrets, raw inputs, databases or screenshots are newly tracked.
+Blocked: reviewed champion registry, original historical expected-starter availability receipts,
+sufficient positive prospective evidence, unavailable current inputs/stats for individual games,
+verified zero-dollar persistent private cloud host. No paid services enabled. Betting/playoffs deferred.

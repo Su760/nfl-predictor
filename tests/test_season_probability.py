@@ -242,3 +242,69 @@ def test_source_bundle_and_period_roles_preserve_reproducibility():
     assert bundle["environment"]["scikit-learn"]
     assert "not out-of-sample" in probability._period_roles()["development"]
     assert "not untouched" in probability._period_roles()["known_benchmark"]
+
+
+def test_compare_saved_candidates_matches_intersection_without_fitting(tmp_path, monkeypatch):
+    cfg = settings()
+
+    def prediction(gid, year, p):
+        return {
+            "game_id": gid,
+            "season": year,
+            "week": 1,
+            "home": "LA",
+            "away": "SF",
+            "horizon": "T60",
+            "kickoff": f"{year}-09-02T00:00:00Z",
+            "cutoff": f"{year}-09-01T23:00:00Z",
+            "result": "home",
+            "p_home": p,
+            "p_away": 0.99 - p,
+            "p_tie": 0.01,
+        }
+
+    baseline = [
+        prediction("v", 2024, 0.6),
+        prediction("extra", 2024, 0.5),
+        prediction("b", 2025, 0.6),
+    ]
+    candidate = [prediction("v", 2024, 0.55), prediction("b", 2025, 0.55)]
+    paths = {
+        "production_elo": probability._object(tmp_path, "rows", baseline, "jsonl"),
+        "qb": probability._object(tmp_path, "rows", candidate, "jsonl"),
+    }
+    specs = {name: {"path": str(path), "sha256": path.stem} for name, path in paths.items()}
+
+    def no_fit(*args):
+        raise AssertionError("comparison must never fit")
+
+    monkeypatch.setattr(probability, "_calibration_fit", no_fit)
+    result = probability.compare_saved_candidates(specs, cfg, tmp_path)
+    assert result["periods"]["validation"]["n"] == 1
+    assert result["periods"]["validation"]["coverage"]["production_elo"]["excluded_game_ids"] == [
+        "extra"
+    ]
+    assert (
+        result["periods"]["known_benchmark"]["models"]["qb"]["paired_vs_production"]["intervals"][
+            "multinomial_log_loss"
+        ]["delta"]
+        > 0
+    )
+    assert (
+        probability.compare_saved_candidates(specs, cfg, tmp_path)["report_path"]
+        == result["report_path"]
+    )
+    candidate[0]["result"] = "away"
+    changed = probability._object(tmp_path, "rows", candidate, "jsonl")
+    specs["qb"] = {"path": str(changed), "sha256": changed.stem}
+    with pytest.raises(ValueError, match="GAME_CONTEXT_MISMATCH"):
+        probability.compare_saved_candidates(specs, cfg, tmp_path)
+
+
+def test_compare_saved_candidates_rejects_changed_source(tmp_path):
+    cfg = settings()
+    path = tmp_path / "rows.jsonl"
+    path.write_text("changed")
+    spec = {"path": str(path), "sha256": "wrong"}
+    with pytest.raises(ValueError, match="ROWS_HASH_MISMATCH"):
+        probability.compare_saved_candidates({"production_elo": spec, "qb": spec}, cfg, tmp_path)

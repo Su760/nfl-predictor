@@ -1,0 +1,30 @@
+tie_fit_policy = "fixed_mass_decisive_conditional_likelihood"
+schema_version = "season-qb-v1"
+qb_model_version = "qb-residual-v1"
+qb_player_stats_url = "https://github.com/nflverse/nflverse-data/releases/download/player_stats/player_stats.parquet"
+primary_horizon = "T60"
+history_start = 2016
+historical_result_delay_hours = 24
+development_end_season = 2023
+validation_season = 2024
+known_benchmark_season = 2025
+experiment_freeze_season = 2026
+qb_coefficient_min = -10.0
+qb_coefficient_max = 10.0
+qb_fit_iterations = 50
+minimum_qb_games = 3
+minimum_qb_attempts = 75
+qb_shrinkage_method = "median_positive_lagged_qb_attempts_development"
+qb_state_through_season = 2025
+zero_dollar_mode = true
+allow_paid_usage = false
+request_timeout_seconds = 30
+transport = "curl"
+allowed_hosts = ["github.com", "release-assets.githubusercontent.com"]
+
+[team_aliases]
+SD = "LAC"
+OAK = "LV"
+STL = "LA"
+LAR = "LA"
+WSH = "WAS"
