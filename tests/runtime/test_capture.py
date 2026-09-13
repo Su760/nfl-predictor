@@ -1663,3 +1663,45 @@ def test_replay_rejects_unverifiable_selected_raw_before_any_append(
         fixture.required.capture_replay(fixture.obligation, "replay", fixture.cutoff)
     assert str(tmp_path) not in str(caught.value)
     assert {path: path.read_bytes() for path in marker_root.rglob("*.json")} == before
+
+
+def test_team_epa_retains_rush_and_missing_qb_metrics_without_imputation():
+    rows = _pbp().to_dicts()
+    rows += [
+        {**rows[0], "play_id": 3, "epa": -0.5, "pass_attempt": 0, "rush_attempt": 1,
+         "passer_player_id": None, "qb_epa": None, "cpoe": None},
+        {**rows[0], "play_id": 4, "epa": 0.7, "qb_epa": 0.9, "cpoe": None},
+    ]
+    normalizer = _normalizer()
+    facts = normalizer.normalize_capture(
+        _ipc(_schedules()), _manifest(capture_id="schedule-mixed"),
+        _ipc(pl.DataFrame(rows)), _manifest(capture_id="pbp-mixed"), _event(),
+    )
+    epa = next(f for f in facts if f.fact_type == "team_game_epa" and f.entity_keys["offense_team"] == "GB")
+    assert epa.payload["plays"] == 3
+    assert epa.payload["offense_epa_per_play"] == pytest.approx(0.1)
+    assert epa.payload["pass_epa_per_play"] == pytest.approx(0.4)
+    assert epa.payload["rush_epa_per_play"] == pytest.approx(-0.5)
+    qb = next(f for f in facts if f.fact_type == "qb_trailing" and f.entity_keys["team"] == "GB")
+    assert qb.payload == {"attempts": 1, "epa_per_play": 0.1, "cpoe": 1.0}
+    prior = next(f for f in facts if f.fact_type == "team_passing_prior" and f.entity_keys["team"] == "GB")
+    assert prior.payload == {"epa_per_play": 0.1, "cpoe": 1.0}
+
+
+def test_missing_qb_history_does_not_create_zero_passing_prior():
+    pbp = _pbp().with_columns(pl.lit(None, dtype=pl.Float64).alias("cpoe"))
+    facts = _normalizer().normalize_capture(
+        _ipc(_schedules()), _manifest(capture_id="schedule-no-qb"),
+        _ipc(pbp), _manifest(capture_id="pbp-no-qb"), _event(),
+    )
+    assert sum(f.fact_type == "team_game_epa" for f in facts) == 4
+    assert not any(f.fact_type in {"qb_trailing", "team_passing_prior"} for f in facts)
+
+
+def test_present_corrupt_qb_metric_still_fails_closed():
+    pbp = _pbp().with_columns(pl.lit("corrupt").alias("cpoe"))
+    with pytest.raises((TypeError, ValueError), match="cpoe"):
+        _normalizer().normalize_capture(
+            _ipc(_schedules()), _manifest(capture_id="schedule-corrupt-qb"),
+            _ipc(pbp), _manifest(capture_id="pbp-corrupt-qb"), _event(),
+        )

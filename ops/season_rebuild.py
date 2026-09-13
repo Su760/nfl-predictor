@@ -217,6 +217,7 @@ def evaluation_report(rows: Sequence[RebuildRow], holdout_season: int) -> dict[s
         }
     return {
         "holdout_season": holdout_season,
+        "evaluation_period_status": "KNOWN_BENCHMARK; inspected previously; not untouched prospective evidence",
         "matched_games": len(holdout),
         "fold": asdict(fold),
         "calibrator_family_by_model": families,
@@ -370,7 +371,33 @@ def _write_coverage(root: Path, config: Mapping[str, Any], rows: Sequence[Rebuil
     destination.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
+def select_team_epa_plays(pbp: pl.DataFrame, history: set[str]) -> pl.DataFrame:
+    """Team EPA requires team/play EPA fields, independently of optional QB metrics."""
+    return pbp.filter(
+        pl.col("game_id").is_in(sorted(history)),
+        pl.col("posteam").is_not_null(), pl.col("defteam").is_not_null(),
+        pl.col("epa").is_not_null(),
+        pl.col("pass_attempt").is_not_null(), pl.col("rush_attempt").is_not_null(),
+    )
+
+
+def repaired_config(config: Mapping[str, Any]) -> dict[str, Any]:
+    """Version repaired outputs without mutating any old selections or evaluation files."""
+    result = dict(config)
+    if result.get("reconstruction_namespace"):
+        return result
+    source_paths = [Path(__file__), CODE_ROOT / "src/nfl_predictor/runtime/capture.py",
+                    CODE_ROOT / config["feature_policy"]]
+    identity = hashlib.sha256(b"".join(path.read_bytes() for path in source_paths)).hexdigest()
+    namespace = "repairs/epa-team-plays-v3/" + identity
+    result["reconstruction_namespace"] = namespace
+    for key in ("dataset_path", "report_path", "coverage_path", "evaluation_records_path", "evaluation_index_path"):
+        result[key] = str(Path(namespace) / config[key])
+    return result
+
+
 def build(config: Mapping[str, Any], root: Path) -> list[RebuildRow]:
+    config = repaired_config(config)
     feature_policy = load_feature_policy(CODE_ROOT / config["feature_policy"])
     normalizer = NflverseFootballNormalizer(feature_policy)
     complete_seasons = {
@@ -426,7 +453,7 @@ def build(config: Mapping[str, Any], root: Path) -> list[RebuildRow]:
         targets = schedules.filter(pl.col("season") == season, pl.col("game_type") == "REG")
         for target in targets.sort(["week", "gameday", "gametime", "game_id"]).to_dicts():
             target_id = target["game_id"]
-            derived = root / "selections-v2" / f"season={season}" / target_id
+            derived = root / config["reconstruction_namespace"] / "selections" / f"season={season}" / target_id
             row_path = derived / "row.json"
             if row_path.exists():
                 rows.append(_row_from_json(row_path.read_bytes()))
@@ -460,13 +487,7 @@ def build(config: Mapping[str, Any], root: Path) -> list[RebuildRow]:
                 pl.when(pl.col("game_id") == target_id).then(None).otherwise(pl.col("away_score")).alias("away_score"),
                 pl.col("div_game").cast(pl.Boolean),
             )
-            selected_pbp = pbp.filter(
-                pl.col("game_id").is_in(sorted(history)),
-                pl.col("posteam").is_not_null(), pl.col("defteam").is_not_null(),
-                pl.col("epa").is_not_null(), pl.col("qb_epa").is_not_null(), pl.col("cpoe").is_not_null(),
-                pl.col("pass_attempt").is_not_null(), pl.col("rush_attempt").is_not_null(),
-                (pl.col("pass_attempt") == 0) | pl.col("passer_player_id").is_not_null(),
-            )
+            selected_pbp = select_team_epa_plays(pbp, history)
             for column in ("play_id", "pass_attempt", "rush_attempt"):
                 nonintegral = selected_pbp.filter(pl.col(column) != pl.col(column).floor()).height
                 if nonintegral:
@@ -644,6 +665,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--max-games", type=int)
     args = parser.parse_args(argv)
     config, root = _load_config(args.config)
+    config = repaired_config(config)
     if args.max_games is not None:
         if args.max_games < 1:
             raise ValueError("--max-games must be positive")

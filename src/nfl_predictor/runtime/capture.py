@@ -103,6 +103,14 @@ def _finite(value: object, field: str) -> float:
     return result
 
 
+def _qb_metrics_available(row: Mapping[str, object]) -> bool:
+    """Absent QB measurements are not zero observations; corrupt present values fail."""
+    for metric in ("qb_epa", "cpoe"):
+        if row[metric] is not None:
+            _finite(row[metric], metric)
+    return row["qb_epa"] is not None and row["cpoe"] is not None
+
+
 def _integer(value: object, field: str, minimum: int = 0) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
         raise ValueError(f"{field} must be an integer at least {minimum}")
@@ -387,15 +395,17 @@ class NflverseFootballNormalizer:
             defense = _team(row["defteam"], "defteam")
             if offense == defense:
                 raise ValueError("play-by-play offense and defense teams must differ")
-            for metric in ("epa", "qb_epa", "cpoe"):
-                _finite(row[metric], metric)
+            _finite(row["epa"], "epa")
+            qb_available = _qb_metrics_available(row)
             pass_attempt = _integer(row["pass_attempt"], "pass_attempt")
             rush_attempt = _integer(row["rush_attempt"], "rush_attempt")
             if pass_attempt not in {0, 1} or rush_attempt not in {0, 1}:
                 raise ValueError("play-by-play attempts must be binary")
             aggregates[(game_id, offense, defense)].append(row)
-            if pass_attempt:
+            if pass_attempt and row["passer_player_id"] is not None:
                 passer = _string(row["passer_player_id"], "passer_player_id")
+                if not qb_available:
+                    continue
                 quarterbacks[(game_id, offense, passer)].append(row)
         self._require_directional_closure(aggregates, schedules, target_source, manifest)
         facts: list[NormalizedFact] = []
@@ -516,8 +526,10 @@ class NflverseFootballNormalizer:
             schedule = schedule_context.get(_string(row["game_id"], "game_id"))
             if schedule is None or _integer(schedule["season"], "season", 1) != previous_season:
                 continue
-            if self._final_schedule(schedule, pbp_manifest) and _integer(
-                row["pass_attempt"], "pass_attempt"
+            if (
+                self._final_schedule(schedule, pbp_manifest)
+                and _integer(row["pass_attempt"], "pass_attempt")
+                and _qb_metrics_available(row)
             ):
                 passing[_team(row["posteam"], "posteam")].append(row)
         for team in sorted(teams):
@@ -538,7 +550,7 @@ class NflverseFootballNormalizer:
                 epa = sum(_finite(row["qb_epa"], "qb_epa") for row in attempts) / len(attempts)
                 cpoe = sum(_finite(row["cpoe"], "cpoe") for row in attempts) / len(attempts)
             else:
-                epa, cpoe = 0.0, 0.0
+                continue  # No observed passing prior; feature assembly fails closed if required.
             facts.append(
                 self._fact(
                     manifest=pbp_manifest,

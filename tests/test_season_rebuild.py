@@ -133,3 +133,26 @@ def test_evaluate_if_changed_reuses_identity_and_invalidates_dataset_or_config(
     assert changed_coverage["experiment"]["signature"] != changed_config["experiment"]["signature"]
     assert len(calls) == 4
     assert len(list((root / "evaluations/records").glob("*.json"))) == 4
+
+
+def test_repaired_selection_retains_team_epa_without_qb_measurements():
+    import polars as pl
+    frame = pl.DataFrame({"game_id": ["prior", "prior", "future"],
+        "posteam": ["GB"] * 3, "defteam": ["CHI"] * 3,
+        "epa": [0.4, -0.2, 0.5], "qb_epa": [0.4, None, 0.5],
+        "cpoe": [None, None, 1.0], "pass_attempt": [1, 0, 1],
+        "rush_attempt": [0, 1, 0], "passer_player_id": ["qb", None, "qb"]})
+    selected = season_rebuild.select_team_epa_plays(frame, {"prior"})
+    assert selected.height == 2 and selected["rush_attempt"].sum() == 1
+
+
+def test_repair_output_namespace_preserves_original_artifacts():
+    import tomllib
+    config = tomllib.loads((MODULE_PATH.parents[1] / "configs/season_rebuild.toml").read_text())
+    original = dict(config)
+    repaired = season_rebuild.repaired_config(config)
+    assert config == original
+    for key in ("dataset_path", "report_path", "coverage_path", "evaluation_records_path", "evaluation_index_path"):
+        assert repaired[key] != original[key]
+        assert repaired[key].startswith("repairs/epa-team-plays-v3/")
+    assert repaired == season_rebuild.repaired_config(repaired)
