@@ -1,0 +1,45 @@
+schema_version = "season-probability-v1"
+research_root = "~/nfl-predictor-live-data/probability"
+source_root = "~/nfl-predictor-live-data/season"
+legacy_research_root = "~/nfl-predictor-live-data/research"
+model_policy = "configs/model_policy_v1.toml"
+history_start = 2016
+development_start = 2018
+development_end = 2023
+validation_season = 2024
+known_benchmark_season = 2025
+prospective_season = 2026
+primary_horizon = "T60"
+horizons = { T72 = 259200, T60 = 3600, FINAL = 300 }
+historical_result_delay_hours = 24
+bootstrap_replicates = 1000
+bootstrap_seed = 42
+confidence_level = 0.95
+reliability_minimum_count = 30
+selection_metric = "multinomial_log_loss"
+selection_tolerance = 0.0001
+minimum_fit_non_ties = 200
+zero_dollar_mode = true
+allow_paid_usage = false
+production_change = "NONE"
+
+[grid]
+home_field_points = [45.0, 65.0, 85.0]
+k_factor = [12.0, 20.0, 28.0]
+offseason_retention = [0.5, 0.6666666666666666, 0.8]
+
+[calibration]
+families = ["identity", "sigmoid"]
+sigmoid_c = 1.0
+max_iter = 2000
+logit_epsilon = 1e-15
+maximum_abs_intercept = 3.0
+maximum_slope = 5.0
+minimum_slope = 0.05
+
+[team_aliases]
+SD = "LAC"
+OAK = "LV"
+STL = "LA"
+LAR = "LA"
+WSH = "WAS"
