@@ -83,3 +83,35 @@ console.log(JSON.stringify({html,empty,unchanged:before===JSON.stringify(ctx.sta
     assert "60.0%" in output["html"] and "39.0%" in output["html"] and "1.0%" in output["html"]
     assert "Starter not confirmed" in output["html"]
     assert "&lt;script&gt;" in output["html"] and "<script>" not in output["html"]
+
+
+def test_live_status_does_not_hide_failed_or_stale_source_checks():
+    from datetime import UTC, datetime
+    now = datetime(2026, 9, 16, 5, tzinfo=UTC)
+    view = {"worker_status": "HEALTHY", "last_successful_source_check": "2026-09-15T20:00:00Z", "next_scheduled_run": "2026-09-15T22:00:00Z"}
+    worker = {"status": "FAILED", "checked_at": "2026-09-16T04:59:30Z", "error": "HTTP 400"}
+    cfg = {"poll_seconds": 60, "maximum_capture_age_seconds": 7200}
+    status = viewer.operational_status(view, worker, cfg, now)
+    assert status["worker_status"] == "FAILED"
+    assert status["source_status"] == "STALE"
+    assert status["scheduled_run_overdue"] is True
+    assert status["worker"]["error"] == "HTTP 400"
+    worker = {**worker, "status": "HEALTHY", "checked_at": "2026-09-16T04:00:00Z"}
+    assert viewer.operational_status(view, worker, cfg, now)["worker_status"] == "STALE / OFFLINE"
+    assert view["worker_status"] == "HEALTHY"  # Read-only derived status.
+
+
+def test_worker_alert_is_visible_and_escapes_failure_text():
+    node = shutil.which("node")
+    script = Path(__file__).parents[1] / "ops/viewer/app.js"
+    harness = r"""
+const fs=require('fs'),vm=require('vm'),source=fs.readFileSync(process.argv[1],'utf8');
+const ctx={document:{getElementById:()=>({})},Intl,Date};vm.createContext(ctx);
+vm.runInContext(source.slice(0,source.lastIndexOf("document.getElementById('refresh').onclick")),ctx);
+console.log(vm.runInContext(`data={worker_status:'FAILED',source_status:'STALE',worker:{error:'HTTP400 <script>'},games:[{week:1,origins:{T60:'MISSED'}}]};operationsAlert()`,ctx));
+"""
+    result = subprocess.run([node, "-e", harness, str(script)], check=True, capture_output=True, text=True)
+    assert 'role="alert"' in result.stdout
+    assert "FAILED" in result.stdout and "STALE" in result.stdout
+    assert "&lt;script&gt;" in result.stdout and "<script>" not in result.stdout
+    assert "1 missed" in result.stdout and "T60" in result.stdout

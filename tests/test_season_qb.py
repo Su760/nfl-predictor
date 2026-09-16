@@ -453,3 +453,35 @@ def test_optional_unverified_inactives_are_disclosed():
     result = season_qb.predict_qb(BASE, game(), artifact(), lambda: NOW)
     assert result["status"] == "AVAILABLE"
     assert any("inactives not yet verified" in reason for reason in result["limitations"])
+
+
+@pytest.mark.parametrize("fault", [None, "duplicate", "wrong_season", "future"])
+def test_current_weekly_supplement_restores_state_without_refitting(tmp_path, monkeypatch, fault):
+    import io
+
+    import polars as pl
+    rows = [{"player_id": p, "player_name": p, "recent_team": t, "opponent_team": o,
+             "position": "QB", "season": 2024, "week": 1, "season_type": "REG",
+             "attempts": 20, "passing_epa": 4.0} for p,t,o in [("h","ATL","PIT"),("a","PIT","ATL")]]
+    current = [{**x, "season": 2025 if fault != "wrong_season" else 2023, "team": x["recent_team"]} for x in rows]
+    for x in current: del x["recent_team"]
+    if fault == "duplicate": current.append(current[0])
+    def fetch(url, cfg, root, clock, suffix):
+        frame = pl.DataFrame(rows if url == "legacy" else current)
+        out = io.BytesIO(); frame.write_parquet(out)
+        return out.getvalue(), {"source_url": url, "raw_sha256": season_qb.sha256(out.getvalue()).hexdigest(), "source_last_modified": None,
+                               "captured_at": "2030-01-01T00:00:00Z" if fault == "future" and url == "current" else season_qb._stamp(NOW)}
+    monkeypatch.setattr(season_qb.season_sources, "_fetch", fetch)
+    cfg = config() | {"qb_player_stats_url": "legacy", "qb_state_supplements": [{"season": 2025, "url": "current"}], "team_aliases": {}}
+    finals = [{"game_id": f"{year}_01_PIT_ATL", "season": year, "week": 1, "home": "ATL", "away": "PIT", "status": "FINAL"} for year in (2024,2025)]
+    a = artifact()
+    if fault:
+        with pytest.raises(ValueError, match={"duplicate":"DUPLICATE", "wrong_season":"SUPPLEMENT_SEASON", "future":"FUTURE"}[fault]):
+            season_qb.refresh_state(a, cfg, tmp_path, finals, lambda: NOW)
+    else:
+        updated = season_qb.refresh_state(a, cfg, tmp_path, finals, lambda: NOW)
+        assert updated["included_game_ids"] == ["2024_01_PIT_ATL", "2025_01_PIT_ATL"]
+        assert updated["player_values"]["h"]["attempts"] == 40
+        assert len(updated["state_source_components"]) == 2
+        assert updated["coefficient"] == a["coefficient"]
+        assert updated.get("lineage") == a.get("lineage")

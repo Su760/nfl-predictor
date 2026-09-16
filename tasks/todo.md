@@ -210,3 +210,18 @@ WorkerPID54635/guardPID54636, healthy11:48:40CDT. This prevents idle sleep only;
 shutdown, network loss and unavailable private always-on hosting remain real dependencies.
 It does not recover missed windows or weaken kickoff deadlines. Rollback is the preserved
 plist followed by bootout/bootstrap of the same label; no global power settings were changed.
+
+## Week1/Week2 audit — September16 UTC
+User authorizes operational/scoring repairs and verified source commits, preserving Elo and all historical forecasts.
+- [x] Read-only audit: 16 finals, 15 production forecasts, 9 correct; paired shadow metrics recovered.
+- [x] Repair verified ESPN date-range HTTP400 via separately archived calendar-year captures, retain complete schedule validation.
+- [x] Make failed/stale checks and missed windows visible; retain actionable provider errors.
+- [x] Verify automatic settlement/review idempotency and corrections, live cycle, historical hashes, Week2 readiness.
+- [x] Publish per-game report, matched comparison, improvement evidence and paper-only dependencies/policy.
+- [x] Verify tests and live behavior; commit/push scoped V2 changes.
+Repair scope: ops/season_sources.py, configs/season_live.toml, ops/week1_viewer.py, ops/viewer/app.js, tests/test_season_sources.py, tests/test_week1_viewer.py; tasks/todo.md and docs/runbooks/2026-09-15-week1-audit.md.
+Root cause: season_sources.py:600 requests a now-failing ESPN date range; year queries work but require both calendar years for 272 games. _curl_download at :97 throws a verbose command error whose truncation hides the source/reason. Viewer exposes worker failure only inside collapsed operations and leaves worker_status HEALTHY from old view.
+
+QB readiness scope expansion: ops/season_qb.py, ops/season_shadow.py, tests/test_season_qb.py, tests/test_season_shadow.py plus existing configs/season_live.toml. Configured legacy player_stats.parquet ends2024; official current stats_player/stats_player_week_2025.parquet and _2026.parquet are available with team renamed from recent_team. Add explicit timestamped supplemental source receipts for state refresh only, retain frozen coefficient/config/primaryT60 and all historical records. Verify duplicates, source-season mismatch, future captures/finals, complete both-team coverage and real Week2 shadows.
+
+Audit verification: source range HTTP400 repaired, nine added cases pass;123 scoped tests pass/1 optional capture skip. Full suite1230pass/42inherited failures/1skip; equivalent untouched baseline1221pass/42fail/1skip. No full-green claim. Browser desktop/mobile and visible failures verified. Week1 9/15,15/16coverage; immutable weekly report5321b349 retained.13,380original forecastfiles unchanged. Week2 production16/16, calibration16/16, QB1valid/15missinginjury; fitted definitions and primaryT60 unchanged. Full report docs/runbooks/2026-09-15-week1-audit.md. No paid calls/wagering; paper eligible-price/fee/contract dependency documented with frozen NO_BET preparation.

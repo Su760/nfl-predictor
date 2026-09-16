@@ -24,6 +24,23 @@ def static_response(path):
     return (ASSETS / name).read_bytes(), kind, 200
 
 
+def operational_status(data, worker, cfg, clock):
+    """Derive current health without mutating saved forecasts or their source states."""
+    age = (clock - datetime.fromisoformat(worker["checked_at"])).total_seconds()
+    worker = dict(worker)
+    if age < 0 or age > 2 * cfg["poll_seconds"]:
+        worker["status"] = "STALE / OFFLINE"
+    source_age = (clock - datetime.fromisoformat(data["last_successful_source_check"])).total_seconds()
+    overdue = (clock - datetime.fromisoformat(data["next_scheduled_run"])).total_seconds() > 2 * cfg["poll_seconds"]
+    return {
+        "worker": worker,
+        "worker_status": worker["status"],
+        "source_status": "FRESH" if 0 <= source_age <= cfg["maximum_capture_age_seconds"] else "STALE",
+        "source_age_seconds": source_age,
+        "scheduled_run_overdue": overdue,
+    }
+
+
 def main():
     from week1_live import configuration
 
@@ -43,12 +60,7 @@ def main():
                     season_cfg, season_root = season_configuration()
                     data = json.loads((season_root / "view.json").read_text())
                     worker = json.loads((season_root / "worker.json").read_text())
-                    age = (
-                        datetime.now(UTC) - datetime.fromisoformat(worker["checked_at"])
-                    ).total_seconds()
-                    if age > 2 * season_cfg["poll_seconds"]:
-                        worker = {**worker, "status": "STALE / OFFLINE"}
-                    data["worker"] = worker
+                    data.update(operational_status(data, worker, season_cfg, datetime.now(UTC)))
                     if self.path != "/api/season":
                         from season_analysis import game_detail
 

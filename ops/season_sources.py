@@ -84,6 +84,7 @@ def _curl_download(url: str, cfg: dict[str, Any], root: Path) -> tuple[bytes, st
             "--silent",
             "--show-error",
             "--location",
+            "--compressed",
             "--max-time",
             str(cfg["request_timeout_seconds"]),
             "--dump-header",
@@ -94,7 +95,14 @@ def _curl_download(url: str, cfg: dict[str, Any], root: Path) -> tuple[bytes, st
             "%{url_effective}",
             url,
         ]
-        completed = subprocess.run(command, check=True, capture_output=True)
+        try:
+            completed = subprocess.run(command, check=True, capture_output=True)
+        except subprocess.CalledProcessError as error:
+            detail = (error.stderr or b"").decode("utf-8", errors="replace").strip()
+            host = urllib.parse.urlparse(url).hostname
+            raise ValueError(
+                f"SOURCE_FETCH_FAILED {host} exit={error.returncode}: {detail[:140]}"
+            ) from error
         effective_url = completed.stdout.decode("utf-8", errors="strict")
         effective = urllib.parse.urlparse(effective_url)
         if effective.scheme != "https" or effective.hostname not in cfg["allowed_hosts"]:
@@ -141,6 +149,36 @@ def _fetch(
     week1_live.write_once(
         root / "captures" / f"{sha256(_canonical(receipt)).hexdigest()}.json", receipt
     )
+    return body, receipt
+
+
+
+def _fetch_scoreboard(cfg, root, clock):
+    """Archive each calendar response and bind the combined schedule to its receipts."""
+    primary = _fetch(cfg["scoreboard_url"], cfg, root, clock, "json")
+    extra_urls = cfg.get("scoreboard_extra_urls", [])
+    if not extra_urls:
+        return primary
+    captures = [primary] + [_fetch(url, cfg, root, clock, "json") for url in extra_urls]
+    events = []
+    for raw, _ in captures:
+        part = json.loads(raw).get("events")
+        if not isinstance(part, list):
+            raise TypeError("BLOCK_REQUIRED_SCOREBOARD_EVENTS_INVALID")
+        events.extend(part)
+    # _games still enforces 272 unique current-season games, never silently drops duplicates.
+    body = _canonical({"events": events})
+    receipt = {
+        "source_url": cfg["scoreboard_url"],
+        "request_started_at": min(r.get("request_started_at", r["captured_at"]) for _, r in captures),
+        "captured_at": max(r["captured_at"] for _, r in captures),
+        "oldest_component_captured_at": min(r["captured_at"] for _, r in captures),
+        "source_last_modified": None,
+        "raw_sha256": sha256(body).hexdigest(),
+        "component_captures": [r for _, r in captures],
+    }
+    week1_live.write_once(root / "raw" / f"{receipt['raw_sha256']}.json", body)
+    week1_live.write_once(root / "captures" / f"{sha256(_canonical(receipt)).hexdigest()}.json", receipt)
     return body, receipt
 
 
@@ -579,7 +617,7 @@ def _input(check: dict[str, Any], data: Any) -> dict[str, Any]:
 def _required_check(
     receipt: dict[str, Any], cfg: dict[str, Any], now: datetime, **extra: Any
 ) -> dict[str, Any]:
-    captured = datetime.fromisoformat(receipt["captured_at"])
+    captured = datetime.fromisoformat(receipt.get("oldest_component_captured_at", receipt["captured_at"]))
     age = (now.astimezone(UTC) - captured).total_seconds()
     if age < 0:
         raise ValueError("BLOCK_REQUIRED_CAPTURE_FROM_FUTURE")
@@ -597,7 +635,7 @@ def fetch_sources(cfg: dict[str, Any], root: Path, clock) -> dict[str, Any]:
         raise ValueError("ZERO_DOLLAR_GUARD")
     captures = {
         "source_url": _fetch(cfg["source_url"], cfg, root, clock, "csv"),
-        "scoreboard_url": _fetch(cfg["scoreboard_url"], cfg, root, clock, "json"),
+        "scoreboard_url": _fetch_scoreboard(cfg, root, clock),
     }
     optional_errors: dict[str, str] = {}
     for key, suffix in (

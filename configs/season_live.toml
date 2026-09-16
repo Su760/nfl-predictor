@@ -4,7 +4,8 @@ history_start = 2016
 history_end = 2025
 minimum_final_games_last_season = 272
 source_url = "https://raw.githubusercontent.com/nflverse/nfldata/master/data/games.csv"
-scoreboard_url = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates=20260901-20270228&limit=1000"
+scoreboard_url = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates=2026&limit=1000"
+scoreboard_extra_urls = ["https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates=2027&limit=1000"]
 injuries_url = "https://www.nfl.com/injuries/"
 inactives_url = "https://www.nfl.com/inactives/"
 depth_url = "https://github.com/nflverse/nflverse-data/releases/download/depth_charts/depth_charts_2026.parquet"
@@ -49,6 +50,11 @@ postgame_summary_url = "https://site.api.espn.com/apis/site/v2/sports/football/n
 
 # Prospectively archived challenger evidence; no automatic production promotion.
 shadow_enabled = true
+# Current nflverse release supplements the immutable legacy QB history source.
+qb_state_supplements = [
+  { season = 2025, url = "https://github.com/nflverse/nflverse-data/releases/download/stats_player/stats_player_week_2025.parquet" },
+  { season = 2026, url = "https://github.com/nflverse/nflverse-data/releases/download/stats_player/stats_player_week_2026.parquet" },
+]
 
 [[shadow_models]]
 name = "elo-calibration-fa15c047"

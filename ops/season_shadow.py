@@ -201,6 +201,7 @@ def refresh_qb_state(view, artifact, spec, root, cfg, clock):
     finalized = [{**game, "status": "FINAL"} for game in history if game["game_type"] == "REG"]
     finalized += _current_finals(view, clock())
     runtime["qb_state_through_season"] = cfg["season"]
+    runtime["qb_state_supplements"] = cfg.get("qb_state_supplements", [])
     try:
         return refresh_state(artifact, runtime, root, finalized, clock)
     except Exception as error:

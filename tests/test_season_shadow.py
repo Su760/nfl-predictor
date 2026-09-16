@@ -341,6 +341,7 @@ def test_qb_state_refresh_uses_verified_sources_and_observed_finals(tmp_path, mo
 
     def refresh(artifact, runtime, root, finals, clock):
         assert runtime["qb_state_through_season"] == 2030
+        assert runtime["qb_state_supplements"] == [{"season": 2030, "url": "https://github.com/current"}]
         assert [x["game_id"] for x in finals] == ["historical", "prior"]
         assert finals[-1]["outcome_version"] == 1
         assert artifact["coefficient"] == 0.2
@@ -358,7 +359,7 @@ def test_qb_state_refresh_uses_verified_sources_and_observed_finals(tmp_path, mo
         },
         spec,
         tmp_path,
-        {**cfg, "season": 2030},
+        {**cfg, "season": 2030, "qb_state_supplements": [{"season": 2030, "url": "https://github.com/current"}]},
         lambda: at,
     )
     assert result["data_as_of"] == stamp(at)

@@ -299,3 +299,42 @@ def test_depth_alternatives_preserve_same_capture_without_starter_weights():
     assert check["status"] == "AVAILABLE"
     assert data["PIT"]["player_name"] == "Starter"
     assert data["PIT"]["alternatives"] == [{"player_name": "Backup", "espn_id": "2", "gsis_id": "b", "depth_rank": 2}]
+
+
+def test_calendar_scoreboard_captures_both_years_and_binds_components(tmp_path, monkeypatch):
+    body, rows = _schedule()
+    events = json.loads(body)["events"]
+    cfg = {"scoreboard_url": "https://source.example/2026", "scoreboard_extra_urls": ["https://source.example/2027"]}
+    seen = []
+    def fetch(url, cfg, root, clock, suffix):
+        seen.append(url)
+        part = events[:256] if url.endswith("2026") else events[256:]
+        raw = json.dumps({"events": part}).encode()
+        return raw, {"source_url": url, "captured_at": "2026-09-16T05:00:00Z", "raw_sha256": season_sources.sha256(raw).hexdigest(), "source_last_modified": None}
+    monkeypatch.setattr(season_sources, "_fetch", fetch)
+    raw, receipt = season_sources._fetch_scoreboard(cfg, tmp_path, lambda: datetime(2026, 9, 16, 5, tzinfo=UTC))
+    assert len(season_sources._games(raw, rows, 2026)) == 272
+    assert seen == [cfg["scoreboard_url"], *cfg["scoreboard_extra_urls"]]
+    assert len(receipt["component_captures"]) == 2
+    assert receipt["raw_sha256"] == season_sources.sha256(raw).hexdigest()
+    assert (tmp_path / "raw" / (receipt["raw_sha256"] + ".json")).read_bytes() == raw
+    # Missing or duplicate events must never make a complete season.
+    with pytest.raises(ValueError, match="INCOMPLETE"):
+        season_sources._games(json.dumps({"events": events[:-1]}).encode(), rows, 2026)
+    with pytest.raises(ValueError, match="INCOMPLETE"):
+        season_sources._games(json.dumps({"events": events[:-1] + [events[0]]}).encode(), rows, 2026)
+
+
+def test_curl_failure_reports_provider_and_exit_without_temp_paths(tmp_path, monkeypatch):
+    def fail(command, **kwargs):
+        raise season_sources.subprocess.CalledProcessError(22, command, stderr=b"curl: (22) HTTP 400")
+    monkeypatch.setattr(season_sources.subprocess, "run", fail)
+    with pytest.raises(ValueError, match=r"SOURCE_FETCH_FAILED source.example.*exit=22.*HTTP 400"):
+        season_sources._curl_download("https://source.example/scoreboard", {"request_timeout_seconds": 30}, tmp_path)
+    assert not list(tmp_path.iterdir())
+
+
+def test_combined_capture_freshness_uses_oldest_component():
+    receipt = {"captured_at": "2026-09-16T05:00:00Z", "oldest_component_captured_at": "2026-09-16T02:00:00Z", "source_last_modified": None, "raw_sha256": "a" * 64}
+    with pytest.raises(ValueError, match="STALE"):
+        season_sources._required_check(receipt, {"maximum_capture_age_seconds": 7200}, datetime(2026, 9, 16, 5, tzinfo=UTC))

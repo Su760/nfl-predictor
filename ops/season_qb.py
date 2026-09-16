@@ -414,6 +414,37 @@ def refresh_state(
     }
     if not required.issubset(frame.columns):
         raise ValueError("QB_PLAYER_STATS_SCHEMA_INVALID")
+    components = [receipt]
+    frames = [frame.select(sorted(required))]
+    for source in cfg.get("qb_state_supplements", []):
+        raw, captured = season_sources._fetch(source["url"], cfg, root, clock, "parquet")
+        current = pl.read_parquet(io.BytesIO(raw))
+        if "recent_team" not in current.columns and "team" in current.columns:
+            current = current.rename({"team": "recent_team"})
+        if not required.issubset(current.columns):
+            raise ValueError("QB_PLAYER_STATS_SCHEMA_INVALID")
+        if set(current["season"].unique().to_list()) != {source["season"]}:
+            raise ValueError("QB_SUPPLEMENT_SEASON_MISMATCH")
+        # Never silently replace overlapping legacy rows; duplicate checks below fail closed.
+        frames.append(current.select(sorted(required)))
+        components.append(captured)
+    if any(_time(c["captured_at"]) > clock() for c in components):
+        raise ValueError("QB_STATE_CAPTURE_FROM_FUTURE")
+    frame = pl.concat(frames, how="vertical_relaxed")
+    if len(components) > 1:
+        buffer = io.BytesIO()
+        frame.write_parquet(buffer)
+        body = buffer.getvalue()
+        receipt = {
+            "source_url": cfg["qb_player_stats_url"],
+            "captured_at": max(c["captured_at"] for c in components),
+            "source_last_modified": None,
+            "raw_sha256": sha256(body).hexdigest(),
+            "component_captures": components,
+            "state_source_policy": "legacy-plus-explicit-weekly-seasons-v1",
+        }
+        week1_live.write_once(root / "raw" / f"{receipt['raw_sha256']}.parquet", body)
+        week1_live.write_once(root / "captures" / f"{_hash(receipt)}.json", receipt)
     through = int(cfg["qb_state_through_season"])
     aliases = cfg.get("team_aliases", {})
     final_keys = set()
@@ -534,6 +565,8 @@ def refresh_state(
             "state_source_url": receipt["source_url"],
             "state_raw_sha256": receipt["raw_sha256"],
             "state_source_last_modified": receipt.get("source_last_modified"),
+            "state_source_components": components,
+            "state_source_policy": receipt.get("state_source_policy", "legacy-single-source"),
             "included_game_ids": sorted(included_game_ids),
         }
     )
