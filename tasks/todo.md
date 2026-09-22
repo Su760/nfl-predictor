@@ -225,3 +225,82 @@ Root cause: season_sources.py:600 requests a now-failing ESPN date range; year q
 QB readiness scope expansion: ops/season_qb.py, ops/season_shadow.py, tests/test_season_qb.py, tests/test_season_shadow.py plus existing configs/season_live.toml. Configured legacy player_stats.parquet ends2024; official current stats_player/stats_player_week_2025.parquet and _2026.parquet are available with team renamed from recent_team. Add explicit timestamped supplemental source receipts for state refresh only, retain frozen coefficient/config/primaryT60 and all historical records. Verify duplicates, source-season mismatch, future captures/finals, complete both-team coverage and real Week2 shadows.
 
 Audit verification: source range HTTP400 repaired, nine added cases pass;123 scoped tests pass/1 optional capture skip. Full suite1230pass/42inherited failures/1skip; equivalent untouched baseline1221pass/42fail/1skip. No full-green claim. Browser desktop/mobile and visible failures verified. Week1 9/15,15/16coverage; immutable weekly report5321b349 retained.13,380original forecastfiles unchanged. Week2 production16/16, calibration16/16, QB1valid/15missinginjury; fitted definitions and primaryT60 unchanged. Full report docs/runbooks/2026-09-15-week1-audit.md. No paid calls/wagering; paper eligible-price/fee/contract dependency documented with frozen NO_BET preparation.
+
+## Historical evaluation and football dashboard — September16
+User explicitly requests short plan then execution; no further approval gate.
+- [x] Audit cached feature lineage at T72/T60; freeze bounded ablations (remove passing EPA, remove rushing EPA), expanding vs last3 estimator seasons, fit only before each evaluation season. Evaluate 2021–2025, all previously reused research; no untouched historical claim.
+- [x] Build read-only ratings/team/market insights from existing captures; add dashboard routes and historical performance filters, preserve styling and forecast history.
+- [x] Run real evaluation, regression checks, desktop/mobile inspection, preservation hashes; publish actual findings and limitations.
+Scope: tasks/todo.md; configs/season_insights.toml; ops/season_evaluation.py; ops/season_insights.py; ops/week1_viewer.py; ops/viewer/{index.html,app.js,styles.css,insights.js}; tests/test_season_evaluation.py; tests/test_season_insights.py; docs/runbooks/2026-09-16-football-insights.md.
+Historical limitation: season_rebuild.py:479 selects history by preceding calendar date; :550 builds at reconstruction time. New evaluator must inspect saved selection IDs and reject any row with a result-availability proxy >= requested cutoff, including all priors. Do not relabel all cached rows as T72-safe. Preserve originals. Use existing model, scaler, chronological fold, calibration and score functions; all parameters fixed before run. Market experiment blocked by absent historical same-time paired prices; no fabricated inputs or spreads.
+
+Re-plan after lineage audit: T72 has only2 eligible rows in each2022–2025 cached season, one-class calibration causes a clear fit failure; do not loosen cutoff or switch calibration to fabricate coverage. T72 reports full-schedule production/simple Elo only, EPA variants explicitly unavailable. T60 has191–204 eligible evaluation games/season and supports declared matched comparison. Next milestone remains native cutoff feature rebuild. Initial evaluator integration also exposed tuple return from historical_games; corrected unpacking after reading function. No production code affected.
+
+Delivery evidence:985 matched T60 games/1359 finalized source games; T72 Elo1359, football unavailable due cutoff-safe sample failure.36 focused tests pass; browser1440/390 verifies actual routes/filters/timing, no overflow/JS errors.13,380 historical files hash-identical. Archived price comparison14/16Week1 and16/16Week2; no betting record. Runbook docs/runbooks/2026-09-16-football-insights.md. Production unchanged; source changes uncommitted.
+Final checks:1243passed/42 inherited failures/1 optional skip; exact baseline failure-name match. All2593 cached kickoff/result/PBP lineage identities verified. Worker healthy/source fresh/paid0; ratings reproduce production exactly. Failed and successful evaluation declarations retain explicit run-status records.
+
+## Cutoff-native football reconstruction — implementation plan
+User approved beginning the next milestone; prior plan-and-execute authorization remains in force. Use executing-plans inline, no commit/push or production promotion.
+Goal: recover matched T60 coverage and enable T72 evaluation with actual cutoff-selected completed-game features.
+Architecture: separate research-only builder reuses existing opponent-adjusted EPA, prior regression and blending, producing only the four existing EPA features. Each horizon gets immutable rows and history lineage. Existing classifier/calibrator/folds remain unchanged. Historical final availability remains the explicit kickoff+24h proxy, not invented historical receipts.
+Scope: tasks/todo.md; new ops/season_cutoff.py; new tests/test_season_cutoff.py; configs/season_insights.toml; ops/season_evaluation.py; tests/test_season_evaluation.py; ops/viewer/insights.js; docs/runbooks/2026-09-16-cutoff-native.md. Private derived artifacts only under existing insights data root; preserve earlier reports and all forecasts.
+- [x] Freeze experiment configuration/source/code lineage; implement strict horizon selections, prior-season-only priors, directional PBP closure, immutable resumable output and regression tests. Verify parity with old features where histories match.
+- [x] Reuse season-forward evaluator on new four-feature matrices at both horizons; rerun the same declared ablations and training-window comparison on identical games. Report recovered/excluded coverage and differences on prior matched samples separately.
+- [x] Publish actual results in existing performance view, verify cutoff mutation/invariance, reproducibility, real desktop/mobile rendering and forecast hashes; document limits and next evidence-driven milestone.
+Root cause: ops/season_rebuild.py:480 filters history by kickoff date, :550 uses reconstruction time. A strict caller-side audit excluded348 timing-invalid and26 unavailable cached T60 rows across2021–2025; T72 insufficient. EPA features themselves do not require target venue, QB, weather or current-game statistics; their rebuilt inputs can cover neutral sites without inventing unused features.
+
+Interface finding: EpaLogisticModel.fit/predict delegates to baselines._as_feature_matrix, which requires exactly42 columns (src/nfl_predictor/models/baselines.py:79). Native rows correctly contain4 measured features, so the initial native evaluation failed before publishing scores. Reuse that model's identical scaler/logistic pipeline through a finite, shape/label-validated four-column adapter; preserve the production42-column wrapper. Add adapter parity and future-data invariance tests. No placeholder padding.
+
+Delivered cutoff-native build 0a57cbea164b90ad7079ca7146f44412a3b39270eed913257d35c888bd623e81 and evaluation 804a12a745dad3afe41cc391e7ad0d5dc5eda3ce558056af81868aa264fe9c7f. Both horizons1359/1359 evaluation coverage; no promotion. Same985-game EPA log loss improves0.669221→0.664591, full-population0.673393; production Elo0.663456 fullT60.46focused tests pass;1253pass/42inherited failures/1skip full suite; real desktop/mobile verified;13380original files preserved. See docs/runbooks/2026-09-16-cutoff-native.md. No commits/pushes, paid usage or production-policy changes.
+
+## Elo-plus-EPA residual milestone — 2026-09-16
+User approved beginning the next milestone; execute this bounded research comparison.
+Scope: configs/season_residual.toml, ops/season_residual.py,
+tests/test_season_residual.py, ops/season_insights.py, ops/viewer/insights.js,
+docs/runbooks/2026-09-16-elo-epa-residual.md, tasks/todo.md.
+- [x] Freeze one four-feature EPA residual with fixed Elo logit offset and ridge penalty;
+  compare production Elo and identically fitted/calibrated intercept-only Elo control.
+  Estimator 2018..T-2, calibration T-1, evaluation 2021..2025; T60 primary, T72 secondary.
+  Reuse cutoff-native lineage; all years previously inspected; no historical holdout.
+- [x] Run real matched evaluation, preserve immutable declaration/predictions/report,
+  report per season and overall, paired uncertainty, coefficients and calibration.
+- [x] Publish separate research results in existing performance dashboard; verify desktop/mobile,
+  chronology and matching regressions, deterministic rerun and forecast preservation.
+No parameter search, model promotion, paid use, wagering, deployment or commits.
+
+Residual delivery: 1,359 matched games/horizon, 8,154 reproducible predictions. EPA incremental
+benefit inconclusive; 2025 deterioration; no promotion. 51 focused tests pass; full suite
+1,258 passed / 42 unchanged baseline failures / 1 optional fixture skip. 13,380 preserved
+forecast files unchanged. Desktop/mobile verified; report docs/runbooks/2026-09-16-elo-epa-residual.md.
+
+## Historical early-season reporting continuation — 2026-09-21
+Approved implementation in the existing V2 worktree. Reuse immutable cutoff-native predictions;
+do not rerun completed model experiments, alter production Elo, or rewrite archived forecasts.
+Scope: tasks/todo.md; ops/season_evaluation.py; tests/test_season_evaluation.py;
+ops/viewer/insights.js; docs/runbooks/2026-09-16-{football-insights,cutoff-native}.md.
+- [x] Derive Weeks 1–2 and full-season metrics from the saved native prediction artifact for
+  each horizon/model, enforcing identical game IDs and cutoffs and retaining paired uncertainty.
+- [x] Publish a deterministic immutable report update and refresh only the mutable dashboard view;
+  distinguish legacy 622/982 from full-coverage 848/1355 and disclose coverage/ties/limitations.
+- [x] Verify focused checks, exact inherited 42-failure fingerprint, forecast preservation,
+  dashboard output, secrets/private-data exclusion, then review, commit and push V2 only.
+
+Review re-plan: extend scope to ops/season_cutoff.py, tests/test_season_cutoff.py,
+ops/season_insights.py, tests/test_season_insights.py and ops/viewer/app.js. Require identical
+season/week/outcome context in paired samples; hash all direct report/build dependencies; strip
+absolute artifact paths from the local API; show winner counts/accuracy in each live horizon row.
+These are concrete pre-commit correctness/privacy findings, not a new experiment or model change.
+
+Delivery verification: report update d8f2db1b69d662d62f79e0bcef652945127ff7dd16156a9309a058f967529239;
+32 focused tests pass. Full suite 1,262 passed / 42 failed / 1 skipped; all 42 failure names
+exactly match the pre-change set (1 runtime services, 22 forecast, 19 outcomes). Clean committed
+HEAD has those 42 plus two already-repaired failures, so this milestone adds none. Immutable native
+evaluation/prediction SHA256 remain 143c4d41…/dfd588fd…. API and repository diff contain no
+machine-local paths, credentials, raw captures, DBs or secrets. Production Elo/policy unchanged.
+
+Follow-up, separate from this milestone: repair the 42 runtime/forecast/outcome test failures by
+making test clocks and filesystem publication-time fixtures deterministic. Investigate the fixed
+2026 kickoff and real marker ctime interaction first; do not weaken production timestamp enforcement.
+
+Backlog: design a future paper-betting tracker using prospectively captured timestamped two-sided
+odds, explicit eligibility/fees/settlement rules, and prospective results. No betting execution.

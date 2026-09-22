@@ -1,0 +1,13 @@
+schema_version = "elo-epa-residual-v1"
+parent_evaluation = "804a12a745dad3afe41cc391e7ad0d5dc5eda3ce558056af81868aa264fe9c7f"
+training_start = 2018
+evaluation_seasons = [2021, 2022, 2023, 2024, 2025]
+primary_horizon = "T60"
+horizons = ["T60", "T72"]
+ridge_penalty = 1.0
+max_iterations = 100
+tolerance = 1e-9
+bootstrap_replicates = 1000
+bootstrap_seed = 42
+zero_dollar_mode = true
+production_change = "NONE"

@@ -8,15 +8,18 @@ from pathlib import Path
 
 ASSETS = Path(__file__).with_name("viewer")
 GAME_ROUTE = re.compile(r"/(?:api/)?games/([A-Za-z0-9_-]+)\Z")
+TEAM_ROUTE = re.compile(r"/teams/([A-Z]{2,3})\Z")
 
 
 def static_response(path):
     """Explicit asset allowlist: never translate request paths to disk paths."""
     assets = {"/": ("index.html", "text/html; charset=utf-8"),
               "/performance": ("index.html", "text/html; charset=utf-8"),
+              "/rankings": ("index.html", "text/html; charset=utf-8"),
+              "/insights.js": ("insights.js", "text/javascript; charset=utf-8"),
               "/app.js": ("app.js", "text/javascript; charset=utf-8"),
               "/styles.css": ("styles.css", "text/css; charset=utf-8")}
-    if GAME_ROUTE.fullmatch(path) and not path.startswith("/api/"):
+    if TEAM_ROUTE.fullmatch(path) or (GAME_ROUTE.fullmatch(path) and not path.startswith("/api/")):
         path = "/"
     if path not in assets:
         return None
@@ -53,6 +56,17 @@ def main():
                 content, kind, code = asset
             elif self.path == "/health":
                 content, kind, code = b'{"status":"ok"}', "application/json", 200
+            elif self.path == "/api/insights":
+                try:
+                    from season_insights import configuration as insights_configuration
+                    from season_insights import snapshot
+
+                    insights_cfg = insights_configuration()
+                    season_root = Path(insights_cfg["season_root"]).expanduser()
+                    data = snapshot(json.loads((season_root / "view.json").read_text()), insights_cfg)
+                    content, kind, code = json.dumps(data, allow_nan=False).encode(), "application/json", 200
+                except (OSError, ValueError, KeyError) as error:
+                    content, kind, code = json.dumps({"error": "Football insights unavailable", "reason": type(error).__name__}).encode(), "application/json", 503
             elif self.path == "/api/season" or (self.path.startswith("/api/") and GAME_ROUTE.fullmatch(self.path)):
                 try:
                     from season_live import configuration as season_configuration

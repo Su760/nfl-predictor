@@ -1,0 +1,34 @@
+schema_version = "football-insights-v1"
+research_root = "~/nfl-predictor-live-data/research"
+season_root = "~/nfl-predictor-live-data/season"
+output_root = "~/nfl-predictor-live-data/insights"
+probability_freeze = "~/nfl-predictor-live-data/probability/freezes/ed4f1227815218d8960113c6ed98d81719a9dcbf4acbcc011778758ed7c477be.json"
+dataset = "repairs/epa-team-plays-v3/33c70c877024b28bb9146d01567053f513528831f242791f28951913c56c6543/datasets/v2-reconstruction-grade-c.jsonl"
+evaluation_seasons = [2021, 2022, 2023, 2024, 2025]
+horizons = { T72 = 259200, T60 = 3600 }
+recent_training_seasons = 3
+calibrator = "sigmoid"
+bootstrap_replicates = 1000
+bootstrap_seed = 42
+historical_result_delay_hours = 24
+minimum_tendency_plays = 100
+recent_games = 4
+neutral_score_margin = 7
+explosive_pass_yards = 20
+explosive_rush_yards = 10
+pbp_url = "https://github.com/nflverse/nflverse-data/releases/download/pbp/play_by_play_2026.parquet"
+zero_dollar_mode = true
+production_change = "NONE"
+
+[variants]
+football_epa = [11, 14, 17, 20]
+without_passing_epa = [11, 14, 20]
+without_rushing_epa = [11, 14, 17]
+
+[native]
+enabled = true
+start_season = 2016
+end_season = 2025
+feature_policy = "configs/feature_policy_v1.toml"
+parity_absolute_tolerance = 1e-10
+reference_evaluation = "7efc6e5292677068bd023cc588a238266844f23ef306c86ff20c691d6eca9b19"
