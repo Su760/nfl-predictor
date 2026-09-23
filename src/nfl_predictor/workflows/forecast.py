@@ -45,6 +45,11 @@ ExecutionMode = Literal["live", "replay"]
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
 
+class ReceiptMarkerMetadata(Protocol):
+    @property
+    def st_ctime_ns(self) -> int: ...
+
+
 class MarketCaptureDisabled(RuntimeError):
     pass
 
@@ -1811,6 +1816,7 @@ class DurableForecastRepository:
         namespace: RepositoryNamespace,
         *,
         artifact_resolver: ArtifactRegistry | None = None,
+        receipt_marker_stat: Callable[[Path], ReceiptMarkerMetadata] | None = None,
     ) -> None:
         if namespace not in {"prospective", "replay"}:
             raise ValueError("durable forecast repository namespace is invalid")
@@ -1818,6 +1824,7 @@ class DurableForecastRepository:
         self.root = root
         self.namespace = namespace
         self.artifact_resolver = artifact_resolver
+        self._receipt_marker_stat = receipt_marker_stat or (lambda marker: marker.stat())
         self.ledger = LedgerStore(root)
         self._terminal_namespace = f"forecast-terminal-{namespace}"
         self._terminal_receipt_namespace = f"forecast-terminal-receipt-{namespace}"
@@ -1942,8 +1949,10 @@ class DurableForecastRepository:
     def _terminal_receipt_publication_time(self, receipt_key: str) -> datetime:
         marker = self.ledger.marker_path(self._terminal_receipt_namespace, receipt_key)
         try:
-            metadata = marker.stat()
+            metadata = self._receipt_marker_stat(marker)
             publication_ns = metadata.st_ctime_ns
+            if type(publication_ns) is not int or publication_ns < 0:
+                raise OSError("terminal receipt marker ctime is invalid")
             seconds, nanoseconds = divmod(publication_ns, 1_000_000_000)
         except OSError as error:
             raise DataIntegrityError("terminal receipt marker metadata is unreadable") from error

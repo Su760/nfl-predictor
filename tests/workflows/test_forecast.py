@@ -65,6 +65,15 @@ class MutableClock:
             self.value = value
 
 
+def receipt_marker_stat(clock):
+    def read(path: Path):
+        path.stat()
+        publication_ns = int(clock().timestamp() * 1_000_000_000)
+        return SimpleNamespace(st_ctime_ns=publication_ns)
+
+    return read
+
+
 def obligation() -> OriginObligation:
     event = EventVersion(
         canonical_event_id="2026_REG_01_GB_CHI",
@@ -1493,7 +1502,11 @@ def test_real_durable_terminal_rechecks_clock_after_attempt_persistence(
 
 def test_durable_committed_graph_reloads_every_typed_reference(tmp_path: Path) -> None:
     item, clock, _, required, optional, builder, predictor, market, _ = build_workflow()
-    repository = forecast_module.DurableForecastRepository(tmp_path, "prospective")
+    repository = forecast_module.DurableForecastRepository(
+        tmp_path,
+        "prospective",
+        receipt_marker_stat=receipt_marker_stat(clock),
+    )
     workflow = ForecastWorkflow(
         repositories=ForecastRepositories(repository),
         required_capture=required,
@@ -1555,7 +1568,11 @@ def _durable_workflow(
         if bindings is None
         else bindings
     )
-    repository = forecast_module.DurableForecastRepository(tmp_path, "prospective")
+    repository = forecast_module.DurableForecastRepository(
+        tmp_path,
+        "prospective",
+        receipt_marker_stat=receipt_marker_stat(clock),
+    )
     workflow = ForecastWorkflow(
         repositories=ForecastRepositories(repository),
         required_capture=required,
@@ -1569,6 +1586,49 @@ def _durable_workflow(
         code_sha=CODE_SHA,
     )
     return item, clock, required, optional, workflow, repository
+
+
+@pytest.mark.parametrize(
+    ("publication_case", "expected_status"),
+    [("on_time", "FOOTBALL_ONLY"), ("late", "MISSED")],
+)
+def test_receipt_marker_metadata_time_controls_terminal_visibility(
+    tmp_path: Path,
+    publication_case: str,
+    expected_status: str,
+) -> None:
+    publication_clock = MutableClock(KICKOFF)
+    item, clock, _, required, optional, builder, predictor, market, _ = build_workflow()
+    publication_clock.set(
+        item.window.target_at_utc
+        if publication_case == "on_time"
+        else item.window.window_closes_at_utc + timedelta(microseconds=1)
+    )
+    repository = forecast_module.DurableForecastRepository(
+        tmp_path,
+        "prospective",
+        receipt_marker_stat=receipt_marker_stat(publication_clock),
+    )
+    workflow = ForecastWorkflow(
+        repositories=ForecastRepositories(repository),
+        required_capture=required,
+        market_capture=optional,
+        feature_builder=builder,
+        lineage_repository=Facts(builder.fact, required, optional),
+        artifact_registry=Registry(
+            (ArtifactBinding("champion-a", Origin.T60, "champion", True, True),)
+        ),
+        predictor=predictor,
+        market_layer=market,
+        clock=clock,
+        code_sha=CODE_SHA,
+    )
+    clock.set(item.window.target_at_utc)
+
+    run = workflow.run(item, "fixture", ForecastExecutionContext.live(clock()))
+
+    assert run is not None and run.status == expected_status
+    assert repository.terminal_run(item.idempotency_key) == run
 
 
 def test_durable_live_preopen_due_and_later_duplicate_share_stable_obligation(

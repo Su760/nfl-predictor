@@ -647,15 +647,26 @@ def utc_nanoseconds(value: datetime) -> int:
     return (delta.days * 86_400 + delta.seconds) * 1_000_000_000 + delta.microseconds * 1_000
 
 
+def receipt_marker_stat(clock):
+    def read(path: Path):
+        path.stat()
+        return SimpleNamespace(st_ctime_ns=utc_nanoseconds(clock()))
+
+    return read
+
+
 def persist_forecast_obligation(
     root: Path,
     obligation: ForecastObligationRecord,
+    *,
+    marker_stat=None,
 ) -> DurableForecastRepository:
     bindings = () if obligation.champion_binding is None else (obligation.champion_binding,)
     source = DurableForecastRepository(
         root,
         "prospective",
         artifact_resolver=StaticArtifactResolver(bindings),
+        receipt_marker_stat=marker_stat,
     )
     obligation_value = OriginObligation(
         obligation.event,
@@ -682,8 +693,13 @@ def prepare_forecast_graph(
     graph: CommittedForecastGraph,
     *,
     trusted_bindings: tuple[ArtifactBinding, ...] | None = None,
+    marker_stat=None,
 ) -> DurableForecastRepository:
-    source = persist_forecast_obligation(root, graph.obligation)
+    source = persist_forecast_obligation(
+        root,
+        graph.obligation,
+        marker_stat=marker_stat,
+    )
     source.artifact_resolver = (
         artifact_resolver_for(graph)
         if trusted_bindings is None
@@ -720,10 +736,15 @@ def persist_forecast_graph(
     *,
     trusted_bindings: tuple[ArtifactBinding, ...] | None = None,
 ) -> DurableForecastRepository:
+    commit_clock = lambda: min(
+        graph.run.created_at_utc,
+        graph.obligation.window_closes_at_utc,
+    )
     source = prepare_forecast_graph(
         root,
         graph,
         trusted_bindings=trusted_bindings,
+        marker_stat=receipt_marker_stat(commit_clock),
     )
     context = ForecastExecutionContext.live(graph.obligation.target_at_utc)
     source.commit_terminal(
@@ -732,10 +753,7 @@ def persist_forecast_graph(
         graph.attempts[-1],
         deadline=graph.obligation.window_closes_at_utc,
         context=context,
-        clock=lambda: min(
-            graph.run.created_at_utc,
-            graph.obligation.window_closes_at_utc,
-        ),
+        clock=commit_clock,
     )
     return source
 
@@ -1831,7 +1849,11 @@ def test_pre_close_receipt_link_metadata_is_immutable_and_graph_stays_importable
     tmp_path: Path,
 ) -> None:
     graph = forecast_graph()
-    source = prepare_forecast_graph(tmp_path / "forecast-source", graph)
+    source = prepare_forecast_graph(
+        tmp_path / "forecast-source",
+        graph,
+        marker_stat=receipt_marker_stat(lambda: graph.obligation.target_at_utc),
+    )
     real_link = forecast_module.os.link
     linked_marker: Path | None = None
     link_metadata: tuple[int, int] | None = None

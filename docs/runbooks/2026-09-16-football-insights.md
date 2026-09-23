@@ -137,3 +137,42 @@ The reconstruction still assumes historical results became available at kickoff+
 publication receipts do not exist; corrected PBP/provider EPA may include later revisions. No closing
 odds, final-season target statistics, target-game QB/injury/weather data, or post-cutoff games enter
 the four reconstructed EPA features. Production Elo and archived forecasts remain unchanged.
+
+## Runtime receipt-clock repair and live audit — September 23, 2026
+
+The inherited 42-test set had one verified causal chain, not 42 independent runtime defects. The
+forecast fixtures use a fixed September 13 kickoff (`tests/workflows/test_forecast.py`), while a
+new terminal receipt marker previously always read the host filesystem's real `st_ctime_ns`
+(`src/nfl_predictor/workflows/forecast.py`). On September 23, an otherwise on-time fixture therefore
+looked ten days late. The durable workflow correctly replaced its intended success or capture failure
+with `MISSED`; outcome fixtures then imported that empty terminal graph, so predictions, quotes and
+score inputs were absent. A diagnostic metadata reader tied to fixture time made all 239 pre-change
+tests in the three affected modules pass, confirming there was no second cause in the saved
+1 runtime / 22 forecast / 19 outcome failure fingerprint.
+
+`DurableForecastRepository` now accepts a narrow receipt-marker stat reader. Its production default
+is unchanged: read the linked marker's real filesystem `st_ctime_ns`, fail closed if it is unreadable
+or invalid, and compare it with the live deadline. Fixed-date test builders inject metadata derived
+from the same logical clock used for candidate durability and receipt durability. Focused regressions
+accept an on-time receipt and reject a receipt one microsecond late. The existing real-link tests still
+reject late ctime when mtime is backdated, reject coarse filesystem ticks crossing a fractional close,
+and reject a receipt whose final durability observation crosses the deadline. Timestamp enforcement
+and portable immutable publication evidence were not weakened.
+
+Validation: the affected runtime/forecast/outcome modules pass 241 tests. The full suite passes
+1,306 with one optional real-capture test skipped because its external fixture is unavailable; there
+are no remaining failures. Focused Ruff passes.
+
+Read-only live audit at 2026-09-23T07:19Z: the private worker is running under the documented
+`caffeinate` LaunchAgent with a current healthy heartbeat. Its latest completed source/forecast cycle
+is 2026-09-23T05:27:35Z and the next scheduled cycle is 07:27:35Z, so no manual refresh was required.
+ESPN schedule/results, nflverse games/history, Week 3 injuries and depth data were captured in that
+cycle. Official inactives remain explicitly `MISSING`: the two discovered Week 2 articles fail the
+strict team/game parser and are not retroactively applied.
+
+All 16 Week 2 games are now final. Saved official, T72, T60 and FINAL scorecards each have 16/16
+coverage and 10/16 correct (62.5%); no completed prediction was regenerated. Week 3 has 16/16 saved
+official forecasts, 1/16 completed T72 snapshots (ATL@GB), and 0/16 T60 or FINAL snapshots because
+those windows are not yet due. The remaining T72 targets fall between September 24 and September 26.
+No Week 3 cutoff is already missed. Production Elo, archived forecasts and all historical evaluation
+artifacts remain unchanged.

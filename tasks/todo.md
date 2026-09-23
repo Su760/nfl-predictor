@@ -304,3 +304,27 @@ making test clocks and filesystem publication-time fixtures deterministic. Inves
 
 Backlog: design a future paper-betting tracker using prospectively captured timestamped two-sided
 odds, explicit eligibility/fees/settlement rules, and prospective results. No betting execution.
+
+## Runtime receipt-clock repair and live freshness — September 23, 2026
+Authorized bounded continuation on `codex/nfl-predictor-v2`; preserve main-worktree changes,
+production Elo, archived forecasts, cutoff enforcement, and prior historical experiments.
+Scope: `src/nfl_predictor/workflows/forecast.py`; `tests/workflows/test_forecast.py`;
+`tests/workflows/test_outcomes.py`; `tasks/todo.md`;
+`docs/runbooks/2026-09-16-football-insights.md`. Add live-operation files only if a read-only
+freshness audit proves the existing supported refresh process needs repair.
+- [x] Add a narrow receipt-marker metadata reader seam whose production default remains real
+  filesystem `st_ctime_ns`; bind fixed-date tests to their logical clocks.
+- [x] Add focused on-time, late, and anti-backdating regressions; resolve the exact saved
+  1 runtime / 22 forecast / 19 outcome failure set before running the full suite.
+- [x] Audit worker/source timestamps, saved Week 2 outcomes, and Week 3 horizon coverage without
+  regenerating completed-game predictions or overwriting archived forecasts; repair only through
+  the documented supported refresh path if stale and record missed cutoffs explicitly.
+- [x] Update the runbook with root cause and evidence, run lint/diff/secrets checks, and prepare
+  the scoped V2 commit. Push/remote-SHA verification immediately follow this recorded work.
+
+Verified before commit: representative real ctime was 2026-09-23T07:08:48Z against a fixed
+2026-09-13T19:35:00Z deadline. All 239 pre-change tests in the affected modules passed under the
+diagnostic fixture-time reader; the implemented suite is 241/241. Full suite: 1,306 passed and one
+optional real-capture fixture skipped, zero failures. Live worker healthy, source cycle05:27:35Z,
+Week2 finals16/16 and official10/16 correct; Week3 official16/16, T721/16 with every other horizon
+not yet due and no missed cutoff. No refresh, forecast regeneration, model search or promotion ran.
