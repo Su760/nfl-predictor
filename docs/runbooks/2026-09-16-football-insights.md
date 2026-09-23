@@ -176,3 +176,63 @@ official forecasts, 1/16 completed T72 snapshots (ATL@GB), and 0/16 T60 or FINAL
 those windows are not yet due. The remaining T72 targets fall between September 24 and September 26.
 No Week 3 cutoff is already missed. Production Elo, archived forecasts and all historical evaluation
 artifacts remain unchanged.
+
+## Historical accuracy claim reconciliation — September 23, 2026
+
+The old approximately 66% claim is substantiated, but it is not a result for the current production
+Elo or the current historical protocol. Commit `746c846` saved an 80-feature stacking bundle at
+`model_ensemble.joblib` (SHA256
+`92a7a09814f93c0e35729b9dc41ce9e15137ac91075f794c16d94af761af5e65`). Its stored accuracy is
+`0.6608084358523726`, exactly **376/569 (66.08%)**, and its stored binary log loss is 0.632209.
+The bundle does not contain game-level predictions, Brier score, split row IDs, or a dataset hash.
+The exact training CSV was not committed, so fields derived from the surviving script and local
+audit are labeled as reconstructed contract evidence below.
+
+| Model/version and source | Train / validation / evaluation | Cutoff and season type | Coverage, ties and exclusions | Result | Development status and production comparability |
+|---|---|---|---|---|---|
+| Production Elo, cutoff-native T−60m; immutable run `804a12…` | Fixed policy; chronological state from 2015 onward; no estimator/validation fit; evaluated 2021–2025 | Actual T−60m replay; regular season only; results available at kickoff+24h proxy | 1,359/1,359 source-finalized games; 4 ties; zero feature-coverage exclusions | **848/1,355, 62.58%**; three-outcome Brier 0.456735; multinomial log loss 0.663456 | Same production formula, unchanged. Seasons were already inspected, so this is reused research, not an untouched holdout. Canonical overall result. |
+| Production Elo, cutoff-native T−72h; immutable run `804a12…` | Same as T−60m | Actual T−72h replay; regular season only; same availability proxy | Same 1,359 games, 4 ties, zero feature-coverage exclusions | **848/1,355, 62.58%**; Brier 0.456766; log loss 0.663496 | Same model and games as T−60m, at a different horizon. Directly comparable only to results using this horizon. |
+| Production Elo, 2024 slice of `804a12…` | Same fixed policy; 2024 is the evaluation season | T−60m / T−72h; regular season only | 272/272 games; no ties or exclusions | **187/272, 68.75%**; T−60m Brier/log loss 0.426532/0.619019; T−72h 0.426914/0.619452 | A one-season slice of the 62.58% overall result, not a different model and not evidence of an ensemble at 68%. Previously inspected research. |
+| Production Elo, legacy cutoff-safe subset; immutable run `7efc6e…` | Same fixed policy and evaluation seasons as current Elo | T−60m only; regular season; conservative cached-row cutoff audit | 985/1,359 games; 3 ties; 374 exclusions: 348 cutoff failures and 26 missing cached rows | **622/982, 63.34%**; Brier 0.449683; log loss 0.655371 | Selective subset, not full coverage. Directly comparable to current Elo only after restricting current predictions to these same 985 games. |
+| Legacy 80-feature stacking ensemble; commit `746c846`, frozen bundle above | Reconstructed script contract: train 2016–2020, validation 2021, evaluation 2022–2023 | No explicit T−72h/T−60m cutoff or publication receipts; lagged team/QB statistics, but target-game QB identity selected from eventual attempts; regular season plus playoffs | 569/569 rows in the legacy test frame: 284 in 2022 and 285 in 2023; 2 ties encoded as the away/not-home class; no source-schedule coverage or exclusion manifest | **376/569, 66.08%**; binary Brier not saved; binary log loss 0.632209 | Test accuracy selected stacking over soft voting, and whole-frame medians were computed before splitting. This was development data, not an untouched holdout. Different games, outcome space, season type and unknown horizon make it not directly comparable with production Elo. |
+
+Brier conventions differ. Current Elo uses the sum of squared errors across home/away/tie
+probabilities, range 0–2, and multinomial log loss with natural logarithms. The legacy ensemble was
+binary home-versus-not-home; a binary Brier, if one had been saved, would have range 0–1. Current Elo
+excludes ties from winner accuracy but includes them in proper scores. The legacy binary target counted
+ties as not-home in both accuracy and log loss.
+
+The surviving legacy scripts establish the split and development influence: `train_ensemble.py`
+chooses the last two seasons as test rows, fills missing values using medians computed before the split,
+and chooses the saved ensemble by test accuracy. `prepare_dataset_advanced.py` shifts rolling values by
+one game, but selects each target game's QB using that game's eventual attempts. No artifact establishes
+when those inputs were published relative to kickoff. These are limitations of provenance and evaluation
+design; they are not evidence by themselves that the reported 66.08% was caused by leakage.
+
+A later uncommitted main-worktree audit is corroborating but not canonical V2 lineage. Its 97-feature
+bundle (SHA256 `1037a6a51a0be8df7367399b69a46d876f36bbbdd089fe4368ad91f1f03cdc01`)
+stores 374/569 (65.73%), binary Brier 0.219462 and log loss 0.628560 for the active calibrated soft
+vote, while its saved uncalibrated stacking candidate stores 377/569 (66.26%), Brier 0.218180 and log
+loss 0.626483. Those results share the legacy 2022–2023 binary sample and its limitations. They explain
+other approximately 66% references, but do not replace the committed 66.08% claim. No ensemble result
+at 68% was found; the verified 68.75% figure is 2024 production Elo, and an approximately 66.96%
+number in a local legacy report is a spread-direction market baseline rather than an ensemble.
+
+### Identical-game evidence
+
+The cutoff-native evaluation saved an explicit common-sample comparison against the legacy run. On
+the exact same 985 T−60m regular-season game IDs and the same three-outcome rules, both saved production
+Elo sets are 622/982 (63.34%), Brier 0.449683 and log loss 0.655371. The paired log-loss change is
+exactly 0.000000. The move from 622/982 to 848/1,355 therefore reflects recovery of 374 previously
+excluded games, not a model change or a measured regression.
+
+No compatible paired comparison exists between the legacy ensemble and production Elo. The ensemble
+bundle saved neither per-game predictions nor row IDs, its exact CSV is not immutable, it has no defined
+prediction horizon, it includes playoffs, and it uses binary tie handling. Comparing its 66.08% with
+62.58%, or comparing the 2024 Elo slice with the five-season Elo total, would compare different samples
+and evaluation rules. There is consequently no comparable evidence here of a model regression.
+
+Next bounded milestone: freeze a prospective, timestamped comparison ledger for production Elo and
+the already-declared challengers on future games. Score only forecasts issued at the same horizon and
+evaluate accuracy, three-outcome Brier and multinomial log loss on identical game IDs before considering
+another feature or model experiment.

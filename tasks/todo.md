@@ -328,3 +328,19 @@ diagnostic fixture-time reader; the implemented suite is 241/241. Full suite: 1,
 optional real-capture fixture skipped, zero failures. Live worker healthy, source cycle05:27:35Z,
 Week2 finals16/16 and official10/16 correct; Week3 official16/16, T721/16 with every other horizon
 not yet due and no missed cutoff. No refresh, forecast regeneration, model search or promotion ran.
+
+## Historical accuracy claim reconciliation — September 23, 2026
+Authorized read-only artifact and git-history audit from V2 commit `4b175aa`; no training search,
+model promotion, forecast rewrite, betting work, or main-worktree changes.
+Initial scope: `tasks/todo.md` and the existing historical evaluation runbooks. Change a dashboard
+label only if saved artifacts prove it misleading; declare that file before editing.
+- [x] Inventory every repository and private saved artifact that can support the reported
+  62.58%, 68.75%, 63.34%, and approximate 66–68% claims, including relevant git history.
+- [x] Reconstruct each evaluation contract: model/version, train/validation/evaluation seasons,
+  cutoff assumptions, season type, coverage/ties/exclusions, and research reuse.
+- [x] Where immutable predictions overlap, score old and current models on identical game IDs,
+  horizons, and outcome rules; otherwise state that no comparable test is possible.
+- [x] Update existing evaluation documentation with a compact provenance/comparability table and
+  correct only proven misleading labels. Run checks proportional to documentation/UI changes.
+- [x] Review for secrets/private paths, commit and push only V2, then verify the remote SHA and
+  report whether the old claim is substantiated and whether comparable evidence shows regression.
