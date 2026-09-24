@@ -407,3 +407,34 @@ reasons and the frozen conventions. Game pages retain the detailed research-only
 Activation verification and the first live obligation audit are recorded below after the
 committed worker reload. Existing archives must remain byte-identical; only new, valid future
 publications may be appended. Missed windows are recorded and never backfilled.
+
+### Activation and current obligations — September 23, 2026, 19:24 CDT
+
+The existing LaunchAgent was reloaded at commit `da26275`, then the documented `--once`
+refresh completed at `2026-09-24T00:24:36.517426Z`. The worker is HEALTHY, required sources
+are FRESH, the next source check is `2026-09-24T02:24:36.517426Z`, and paid services remain
+disabled. The immutable comparison policy was created with the exact contract above. Hash
+verification found all 48,526 pre-existing production/shadow archive files unchanged; the
+cycle appended 119 forecast receipts/evidence/policy records and one new valid production
+coverage revision. It did not rewrite a completed-game forecast.
+
+Both configured challengers are currently operational. Calibration has 8,860 immutable
+revisions over 47 games; QB has 2,414 revisions over 42 games. The frozen comparison currently
+has 216 eligible games with known future kickoffs; another 24 schedule entries in Weeks 16–18
+have no kickoff timestamp yet and cannot have a cutoff obligation. No eligible outcome has
+settled, so all accuracy, Brier and log-loss samples are N=0 and explicitly small.
+
+At T60, both challengers are 0/216 forecasted, 216 scheduled and 0 missed because no eligible
+T60 window has occurred. At T72, calibration is 1/216 forecasted with 215 scheduled and 0
+missed. QB is 0/216 with 215 scheduled and one missed: ATL@GB has no valid saved QB forecast
+with origin T72. Later UPDATE forecasts exist but are not relabeled or backfilled. The exact
+per-game blocker at that expired window was not preserved in the latest view; period reports
+show QB-state refresh failures, including network timeouts, but do not prove which failure
+caused this specific miss. The dashboard therefore reports the narrower verified reason
+`NO_SAVED_VALID_T72_SHADOW_FORECAST_BEFORE_CUTOFF`.
+
+The next forecast obligations are nine Week 3 T72 games at the 17:00Z target on September 24
+(allowed save window 16:50–17:10Z), followed by two games at the 20:05Z target. ATL@GB T60 is
+targeted for 23:15Z (23:05–23:25Z). The daemon and worker-specific `caffeinate -i` assertion
+are running. Collection is unattended while this Mac remains awake, logged in and online;
+closed-lid sleep, shutdown and network/source outages remain external failure modes.

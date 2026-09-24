@@ -364,7 +364,7 @@ Scope: `ops/season_shadow.py`, `configs/season_live.toml`, `tests/test_season_sh
   research separate and show blocked models and small samples without hiding missing forecasts.
 - [x] Verify immutable publication/cutoff behavior, matching, missing inputs and scoring with
   focused red/green tests; run the affected broader tests, Ruff/JS/diff/secrets checks.
-- [ ] Audit the live worker, source freshness, current challenger state and upcoming T72/T60
+- [x] Audit the live worker, source freshness, current challenger state and upcoming T72/T60
   obligations. Use only the supported scheduler; record missed cutoffs without backfilling.
-- [ ] Update the runbook, commit and push only V2, verify the remote SHA and report whether the
+- [x] Update the runbook, commit and push only V2, verify the remote SHA and report whether the
   existing local worker can collect the frozen comparison unattended.
