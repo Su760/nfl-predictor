@@ -438,3 +438,89 @@ The next forecast obligations are nine Week 3 T72 games at the 17:00Z target on 
 targeted for 23:15Z (23:05–23:25Z). The daemon and worker-specific `caffeinate -i` assertion
 are running. Collection is unattended while this Mac remains awake, logged in and online;
 closed-lid sleep, shutdown and network/source outages remain external failure modes.
+
+## Prospective delivery and displayed probabilities — September 23, 2026
+
+Fresh audit time: `2026-09-24T02:18:42Z` (`21:18 CDT`). The worker heartbeat was HEALTHY at
+`02:18:16Z`; the saved view's required sources were FRESH from `00:24:36Z`, with its next
+deadline-aware run scheduled for `02:24:36Z`. No comparison result had settled.
+The scheduled cycle then completed normally at `02:25:28.538750Z`: sources remained FRESH,
+production reported zero changed probabilities, zero new forecast coverage and zero new saved
+revisions, while `last_forecast_generation` correctly remained `00:24:36.512064Z`. The next
+source check is `04:25:28.538750Z`; the next forecast cutoff remains the Week 3 T72 window at
+`16:50–17:10Z`. Delivery counts below were unchanged by the refresh.
+
+All frozen-comparison obligations with a known kickoff, classified at that audit time:
+
+| Challenger | Horizon | Delivered closed windows | Missed closed windows | Blocked now | Not yet due | Due now |
+|---|---:|---:|---:|---:|---:|---:|
+| Elo calibration | T60 primary | 0 | 0 | 0 | 216 | 0 |
+| Elo calibration | T72 secondary | 1 | 0 | 0 | 215 | 0 |
+| QB residual | T60 primary | 0 | 0 | 0 | 216 | 0 |
+| QB residual | T72 secondary | 0 | 1 | 0 | 215 | 0 |
+
+The delivered calibration record for ATL@GB is immutable origin T72, generated
+`2026-09-22T00:09:57.001356Z` and durably received at `00:09:57.002196Z`, inside its
+`00:05–00:25Z` window. The QB T72 miss is not a scheduler miss: saved input snapshots at
+`00:09:51Z` and `00:15:31Z` show expected QBs available, and the contemporaneous QB-state
+artifact contains every required prior ATL/GB result. Both snapshots record injuries as
+`MISSING / NO_OFFICIAL_INJURY_REPORT_FOR_GAME_WEEK`. The frozen QB guard requires an AVAILABLE
+injury report and therefore returned `QB_INJURY_EVIDENCE_UNAVAILABLE`; fallback estimates are
+not published as shadow forecasts. Later QB UPDATE records remain UPDATE and do not repair or
+replace the missed T72 obligation.
+
+### Which probability the UI displays
+
+- The main card reads `scorecards.games[].prediction_id`, then displays that exact revision's
+  `p_home`, `p_away` and `p_tie` from `game.predictions`. Before kickoff it is labeled **Latest
+  pregame estimate · production Elo**. After kickoff the same selection is labeled **Official
+  scored forecast · latest valid pregame production Elo**.
+- The game-detail API independently resolves `official_prediction` from the same scorecard
+  `prediction_id`; the detail card receives that exact record. Page visits never reconstruct a
+  probability.
+- The official scorecard chooses the latest valid production-role revision by durable
+  publication time, restricted to the current schedule version and strictly before kickoff.
+  Outcome contents cannot select the revision.
+- T72, T60 and FINAL scorecards instead choose the latest valid revision whose `origin` exactly
+  matches that horizon. A later UPDATE, FINAL or official revision does not rewrite an earlier
+  horizon.
+
+The card now shows **Forecast published** separately from **Latest source check** and states that
+a newer check does not imply a changed probability. Research challenger tables are explicitly
+labeled **Research shadow probabilities · not official**. Live comparison coverage uses separate
+columns for future scheduled, due-now and missed/overdue obligations.
+
+### Recalculation, publication and input use
+
+The daemon polls its clock every 60 seconds. Normal source refresh is approximately every two
+hours; within two hours of a game it checks every five minutes. Independently, `next_check`
+inserts every future T72, T60 and FINAL target and selects the earliest deadline or cadence event.
+T72/T60 accept publications from target−10 minutes through target+10 minutes. FINAL begins at
+kickoff−5 minutes and closes at kickoff. The scheduler regression verifies a T72 target preempts
+the two-hour source interval, while the five-minute near-game cadence reaches T60 even earlier.
+External fetch latency or source failure can still consume a window; timestamp enforcement stays
+fail-closed. No scheduler defect was reproduced, so scheduler code was not changed.
+
+Each scheduled run refetches sources, rebuilds production Elo state from only available finalized
+results, and considers games within the eight-day slate. It publishes ON_DEMAND for first
+coverage, the named horizon while that window is due, or UPDATE when the saved input/model-state
+fingerprint changes. A refresh may therefore save newer evidence while probabilities remain
+identical.
+
+- Production Elo probabilities use past finalized scores, team identity, offseason regression,
+  home/neutral venue, fixed Elo policy and the historical tie rate. Expected QB, injuries,
+  inactives and weather are collected but do not alter production probabilities.
+- The calibration shadow maps production Elo's conditional home probability through its frozen
+  sigmoid and preserves production tie mass. It does not use QB, injury or weather values.
+- The QB shadow starts from the paired production probability, then uses timestamped expected-QB
+  identity, injury/inactive availability guards, and frozen pre-cutoff player/team passing-EPA
+  state. Weather does not affect it. Missing required evidence yields an unscored fallback.
+
+At each named horizon the saved origin record becomes immutable when published and no later
+origin can replace it. At kickoff all publication closes; official scoring remains fixed to the
+latest valid pre-kickoff production revision, while pending outcomes can later settle or retract
+without changing that forecast.
+
+The LaunchAgent remains wrapped by `caffeinate -i`, and macOS reports an active
+`PreventUserIdleSystemSleep` assertion. This supports unattended collection only while the Mac is
+awake, logged in and online. It does not support closed-lid sleep, shutdown or offline operation.

@@ -88,6 +88,26 @@ def test_worker_runs_beyond_week_one_and_final_window():
     assert live.next_check([], at, cfg) == live.stamp(at + timedelta(hours=2))
 
 
+def test_deadline_targets_preempt_two_hour_source_cycle():
+    at = datetime(2030, 9, 1, tzinfo=UTC)
+    cfg = {
+        "check_seconds": 7200,
+        "near_game_seconds": 7200,
+        "near_game_check_seconds": 300,
+        "result_poll_hours": 8,
+        "origin_seconds": {"T72": 259200, "T60": 3600, "FINAL": 300},
+    }
+    t72_kick = at + timedelta(hours=72, minutes=45)
+    assert live.next_check(
+        [{"kickoff": live.stamp(t72_kick), "status": "STATUS_SCHEDULED"}], at, cfg
+    ) == live.stamp(at + timedelta(minutes=45))
+
+    t60_kick = at + timedelta(minutes=90)
+    assert live.next_check(
+        [{"kickoff": live.stamp(t60_kick), "status": "STATUS_SCHEDULED"}], at, cfg
+    ) == live.stamp(at + timedelta(minutes=5))
+
+
 def test_policy_is_frozen_and_not_backdated(tmp_path):
     first = datetime(2030, 9, 10, tzinfo=UTC)
     a = live.freeze_policy(tmp_path, first)

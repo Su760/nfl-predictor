@@ -368,3 +368,24 @@ Scope: `ops/season_shadow.py`, `configs/season_live.toml`, `tests/test_season_sh
   obligations. Use only the supported scheduler; record missed cutoffs without backfilling.
 - [x] Update the runbook, commit and push only V2, verify the remote SHA and report whether the
   existing local worker can collect the frozen comparison unattended.
+
+## Prospective delivery and probability-display audit — September 23, 2026
+
+Authorized continuation from V2 tip `748e15c`. Reuse the existing scheduler, immutable forecast
+archive, comparison policy and scorecards. Preserve production Elo/model policy, all saved
+forecasts and unrelated main-worktree changes. No experiment, tuning, promotion, paid service,
+betting work or duplicate tracker.
+
+Scope: `ops/viewer/app.js`, `tests/test_week1_viewer.py`, `tests/test_season_live.py`,
+`docs/runbooks/season-live.md`, and this ledger.
+
+- [x] Derive every closed and future comparison obligation from the current clock, frozen policy,
+  kickoff schedule and saved receipts; classify delivered, missed, blocked and not-yet-due.
+- [x] Trace main-card, game-detail and official/horizon scorecard probability selection and the
+  production/calibration/QB recalculation inputs and cadence.
+- [x] Add focused UI regressions, then label latest production estimates, forecast/source times,
+  research shadows and scheduled/due/missed comparison coverage without changing selection.
+- [x] Verify deadline scheduling independently of the two-hour source cadence; change scheduler
+  code only if a reproducible defect exists. Preserve expired misses and prohibit relabel/backfill.
+- [x] Verify focused tests, live health and sleep assertion; update the runbook, scan for secrets,
+  commit/push only V2 and verify the remote SHA.

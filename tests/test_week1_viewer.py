@@ -85,6 +85,33 @@ console.log(JSON.stringify({html,empty,unchanged:before===JSON.stringify(ctx.sta
     assert "&lt;script&gt;" in output["html"] and "<script>" not in output["html"]
 
 
+def test_game_cards_name_selected_version_and_separate_forecast_from_source_time():
+    node = shutil.which("node")
+    assert node is not None
+    script = Path(__file__).parents[1] / "ops/viewer/app.js"
+    harness = r"""
+const fs=require('fs'),vm=require('vm'),source=fs.readFileSync(process.argv[1],'utf8');
+const ctx={document:{getElementById:()=>({})},Intl,Date,marketPanel:()=>''};vm.createContext(ctx);
+vm.runInContext(source.slice(0,source.lastIndexOf("document.getElementById('refresh').onclick")),ctx);
+const prediction={revision_id:'p1',generated_at:'2030-09-01T10:00:00Z',published_at:'2030-09-01T10:00:02Z',p_home:.6,p_away:.38,p_tie:.02,model_version:'elo-season-v1',inputs:{}};
+const game={game_id:'g1',week:1,home:'CAR',away:'CHI',kickoff:'2030-09-02T10:00:00Z',predictions:[prediction],outcomes:[],origins:{T72:'COMPLETE',T60:'SCHEDULED',FINAL:'SCHEDULED'}};
+const past={...game,game_id:'g2',kickoff:'2020-09-02T10:00:00Z'};
+vm.runInContext("data="+JSON.stringify({last_successful_source_check:'2030-09-01T11:00:00Z',sources:{},scorecards:{games:[{game_id:'g1',prediction_id:'p1'},{game_id:'g2',prediction_id:'p1'}]}}),ctx);
+ctx.game=game;ctx.past=past;
+console.log(JSON.stringify({card:vm.runInContext('match(game)',ctx),detail:vm.runInContext('match(game,true,game.predictions[0])',ctx),past:vm.runInContext('match(past,true,past.predictions[0])',ctx)}));
+"""
+    result = subprocess.run(
+        [node, "-e", harness, str(script)], check=True, capture_output=True, text=True
+    )
+    output = json.loads(result.stdout)
+    for html in (output["card"], output["detail"]):
+        assert "Latest pregame estimate · production Elo" in html
+        assert "Forecast published" in html
+        assert "Latest source check" in html
+        assert html.index("Forecast published") < html.index("Latest source check")
+    assert "Official scored forecast · latest valid pregame production Elo" in output["past"]
+
+
 def test_live_model_comparison_is_visible_with_coverage_uncertainty_and_blockers():
     node = shutil.which("node")
     assert node is not None
@@ -104,10 +131,29 @@ console.log(vm.runInContext('shadowResearch()',ctx));
     assert "Primary · T60" in html and "Secondary · T72" in html
     assert "1 / 1" in html and "20.7%–100.0%" in html
     assert "1 / 2" in html and "1 missed" in html
+    assert "Future scheduled" in html and "Due now" in html and "Missed / overdue" in html
     assert "Small sample" in html
     assert "sum of three squared outcome errors; range 0-2" in html
     assert "QB source &lt;late&gt;" in html and "QB source <late>" not in html
     assert "manual review only" in html
+
+
+def test_game_shadow_probabilities_are_explicitly_research_only():
+    node = shutil.which("node")
+    assert node is not None
+    script = Path(__file__).parents[1] / "ops/viewer/app.js"
+    harness = r"""
+const fs=require('fs'),vm=require('vm'),source=fs.readFileSync(process.argv[1],'utf8');
+const ctx={document:{getElementById:()=>({})},Intl,Date};vm.createContext(ctx);
+vm.runInContext(source.slice(0,source.lastIndexOf("document.getElementById('refresh').onclick")),ctx);
+vm.runInContext("data="+JSON.stringify({shadow:{games:{g1:{cal:{status:'VALID',p_home:.55,p_away:.43,p_tie:.02}}}}}),ctx);
+console.log(vm.runInContext("shadowResearch('g1')",ctx));
+"""
+    result = subprocess.run(
+        [node, "-e", harness, str(script)], check=True, capture_output=True, text=True
+    )
+    assert "Research shadow probabilities · not official" in result.stdout
+    assert "Official predictions and scoring are unchanged" in result.stdout
 
 
 def test_live_status_does_not_hide_failed_or_stale_source_checks():
