@@ -85,6 +85,31 @@ console.log(JSON.stringify({html,empty,unchanged:before===JSON.stringify(ctx.sta
     assert "&lt;script&gt;" in output["html"] and "<script>" not in output["html"]
 
 
+def test_live_model_comparison_is_visible_with_coverage_uncertainty_and_blockers():
+    node = shutil.which("node")
+    assert node is not None
+    script = Path(__file__).parents[1] / "ops/viewer/app.js"
+    harness = r"""
+const fs=require('fs'),vm=require('vm'),source=fs.readFileSync(process.argv[1],'utf8');
+const ctx={document:{getElementById:()=>({})},Intl,Date};vm.createContext(ctx);
+vm.runInContext(source.slice(0,source.lastIndexOf("document.getElementById('refresh').onclick")),ctx);
+vm.runInContext("data="+JSON.stringify({shadow:{status:'SHADOW_ONLY',production_change:'NONE',comparison_policy:{collection_start:'2030-09-01T00:00:00Z',primary_horizon:'T60',secondary_horizons:['T72'],ties:'excluded from winner accuracy; included in three-outcome Brier and log loss',brier_convention:'sum of three squared outcome errors; range 0-2',promotion:'manual review only; no automatic production rewrite'},models:{cal:{status:'SHADOW_ONLY',saved_forecasts:2,game_coverage:1},qb:{status:'BLOCKED',reason:'QB source <late>',saved_forecasts:0,game_coverage:0}},scorecards:{cal:{horizons:{T60:{operational_coverage:{eligible_games:2,forecasted:1,settled:1,awaiting_result:0,scheduled:0,due:0,missed:1,missing_predictions:[{game_id:'g2',reason:'NO_INPUT'}]},paired_comparison:{n:1,shadow:{correct:1,winner_accuracy_denominator:1,straight_up_accuracy:1,accuracy_interval_95:[.2066,1],multiclass_brier:.2,multinomial_log_loss:.3},baseline:{correct:0,winner_accuracy_denominator:1,straight_up_accuracy:0,accuracy_interval_95:[0,.7935],multiclass_brier:.4,multinomial_log_loss:.6},delta_log_loss:-.3,delta_brier:-.2,small_sample:true,brier_convention:'sum of three squared outcome errors; range 0-2'}},T72:{operational_coverage:{eligible_games:2,forecasted:0,settled:0,awaiting_result:0,scheduled:1,due:0,missed:1,missing_predictions:[{game_id:'g1',reason:'NO_T72'}]},paired_comparison:{n:0,shadow:{},baseline:{},small_sample:true,brier_convention:'sum of three squared outcome errors; range 0-2'}}}}}}}),ctx);
+console.log(vm.runInContext('shadowResearch()',ctx));
+"""
+    result = subprocess.run(
+        [node, "-e", harness, str(script)], check=True, capture_output=True, text=True
+    )
+    html = result.stdout
+    assert "Live model comparison" in html
+    assert "Primary · T60" in html and "Secondary · T72" in html
+    assert "1 / 1" in html and "20.7%–100.0%" in html
+    assert "1 / 2" in html and "1 missed" in html
+    assert "Small sample" in html
+    assert "sum of three squared outcome errors; range 0-2" in html
+    assert "QB source &lt;late&gt;" in html and "QB source <late>" not in html
+    assert "manual review only" in html
+
+
 def test_live_status_does_not_hide_failed_or_stale_source_checks():
     from datetime import UTC, datetime
     now = datetime(2026, 9, 16, 5, tzinfo=UTC)

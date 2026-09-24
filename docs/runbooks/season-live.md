@@ -358,3 +358,52 @@ WorkerPID54635/guardPID54636, healthy11:48:40CDT. This prevents idle sleep only;
 shutdown, network loss and unavailable private always-on hosting remain real dependencies.
 It does not recover missed windows or weaken kickoff deadlines. Rollback is the preserved
 plist followed by bootout/bootstrap of the same label; no global power settings were changed.
+
+## Frozen prospective model comparison — September 23, 2026
+
+This milestone reuses the existing shadow scheduler, immutable per-game forecast directories,
+durable source receipts, paired production references and scorecards in `ops/season_shadow.py`.
+There is no second forecast pipeline or result ledger. Production remains
+`elo-season-v1`; its policy, probabilities and archived forecasts are unchanged.
+
+The comparison contract is configured in `configs/season_live.toml` and written once as the
+private `shadow/comparison-policy.json`. Its collection start is
+`2026-09-24T00:11:30.920767Z`. Eligibility is limited to regular-season games with kickoff
+after that instant. A future game's already-saved, valid, immutable forecast remains eligible;
+games whose outcomes were already known at the freeze are excluded. The primary horizon is
+T60 and the separately reported secondary horizon is T72, both using the existing ±10-minute
+origin window. At each horizon, scoring selects the latest valid saved challenger forecast and
+the production Elo reference embedded with that exact publication. No result can choose the
+revision or comparison sample.
+
+The latest observed official FINAL is the outcome; unresolved retractions remain pending.
+Ties are excluded from winner accuracy and included in multinomial natural-log loss and the
+three-outcome Brier score (sum of three squared outcome errors, range 0–2). Accuracy receives
+a 95% Wilson interval and samples below 30 decisive games are labeled small. Operational
+coverage reports all eligible games as forecasted, awaiting result, scheduled, due or missed,
+with an explicit reason for each missed forecast. Performance is only the identical-game pair;
+missing predictions remain visible in coverage and are not converted to losses or silently
+dropped. Promotion is manual-review-only and is separate from display; weekly outcomes do not
+retune or automatically promote a challenger.
+
+Frozen challengers:
+
+- `elo-calibration-fa15c047` uses the existing hash-bound calibration artifact and only the
+  already-supported production Elo probability input. It is the currently operational
+  challenger.
+- `qb-residual-cdeab16a` uses the existing hash-bound QB artifact, runtime config, historical
+  source and timestamped depth/injury/inactive receipts. It remains selected because the
+  runtime path is implemented, but forecasts fail closed whenever current QB evidence or the
+  nflverse state supplement is unavailable.
+- The repaired EPA experiments remain research-only and are not selected. No supported live,
+  timestamped EPA feature feed and runtime artifact exists for this scheduler; historical
+  reconstructed features are not substituted for prospective inputs.
+
+The `/performance` dashboard now shows a compact **Live model comparison** section separate
+from official scoring and reconstructed research. It reports operational coverage, correct /
+non-ties, Wilson uncertainty, challenger/Elo Brier and log loss on the same games, blocker
+reasons and the frozen conventions. Game pages retain the detailed research-only shadow view.
+
+Activation verification and the first live obligation audit are recorded below after the
+committed worker reload. Existing archives must remain byte-identical; only new, valid future
+publications may be appended. Missed windows are recorded and never backfilled.

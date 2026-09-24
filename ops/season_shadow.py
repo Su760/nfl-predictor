@@ -29,6 +29,7 @@ from season_scoring import (
     _valid_prediction,
 )
 
+from nfl_predictor.evaluation.calibration import wilson_interval
 from nfl_predictor.evaluation.metrics import multiclass_brier
 from nfl_predictor.models.tie import to_three_way
 
@@ -52,6 +53,63 @@ def load_artifact(spec, clock):
         if artifact.get(key) and _instant(artifact[key]) > clock:
             raise ValueError("SHADOW_ARTIFACT_FROM_FUTURE")
     return artifact
+
+
+def freeze_live_comparison_policy(root, cfg):
+    """Freeze one prospective comparison contract beside the existing shadow archive."""
+    raw = cfg["live_model_comparison"]
+    primary = raw["primary_horizon"]
+    secondary = list(raw["secondary_horizons"])
+    horizons = [primary, *secondary]
+    if (
+        raw["schema_version"] != "live-model-comparison-v1"
+        or primary != "T60"
+        or secondary != ["T72"]
+        or len(set(horizons)) != len(horizons)
+        or any(horizon not in ORIGINS for horizon in horizons)
+        or raw["accuracy_interval"] != "wilson_95"
+        or int(raw["small_sample_non_ties"]) < 1
+    ):
+        raise ValueError("LIVE_COMPARISON_CONFIG_INVALID")
+    _instant(raw["collection_start"])
+    models = []
+    for spec in cfg.get("shadow_models", []):
+        model = {
+            key: spec[key]
+            for key in ("name", "kind", "artifact_sha256", "prospective_start")
+        }
+        model.update(
+            {
+                key: spec[key]
+                for key in ("runtime_config_sha256", "history_source_sha256")
+                if key in spec
+            }
+        )
+        models.append(model)
+    policy = {
+        "schema_version": raw["schema_version"],
+        "collection_start": raw["collection_start"],
+        "primary_horizon": primary,
+        "secondary_horizons": secondary,
+        "horizon_seconds": {horizon: cfg["origin_seconds"][horizon] for horizon in horizons},
+        "origin_window_seconds": cfg["origin_window_seconds"],
+        "models": models,
+        "eligibility": (
+            "regular-season games with kickoff after collection_start; one latest valid saved "
+            "challenger forecast and its frozen production reference at the same horizon"
+        ),
+        "outcomes": "latest observed official FINAL; retractions unresolved",
+        "ties": "excluded from winner accuracy; included in three-outcome Brier and log loss",
+        "brier_convention": "sum of three squared outcome errors; range 0-2",
+        "log_loss_convention": "multinomial natural logarithm",
+        "accuracy_interval": "95% Wilson interval on non-ties",
+        "small_sample_non_ties": int(raw["small_sample_non_ties"]),
+        "selection_metric": "multinomial_log_loss with Brier and winner accuracy reported",
+        "promotion": "manual review only; no automatic production rewrite",
+    }
+    path = Path(root) / "shadow" / "comparison-policy.json"
+    write_once(path, policy)
+    return json.loads(path.read_text())
 
 
 def _candidate(kind, baseline, game, artifact, clock):
@@ -96,11 +154,72 @@ def _metrics_row(game, prediction, clock):
     }
 
 
-def score_shadow(games, records, clock, starts):
+def _horizon_metrics_row(game, prediction, clock, horizon, policy):
+    row = _metrics_row(game, prediction, clock)
+    if prediction is not None:
+        return row
+    kick = _instant(game["kickoff"])
+    target = kick - timedelta(seconds=policy["horizon_seconds"][horizon])
+    start = target - timedelta(seconds=policy["origin_window_seconds"])
+    deadline = min(kick, target + timedelta(seconds=policy["origin_window_seconds"]))
+    row["coverage"] = (
+        "MISSED" if clock >= deadline else "SCHEDULED" if clock < start else "DUE"
+    )
+    return row
+
+
+def _score_with_uncertainty(rows):
+    result = _score_rows(rows)
+    denominator = result["winner_accuracy_denominator"]
+    result["accuracy_interval_95"] = (
+        list(wilson_interval(result["correct"], denominator)) if denominator else None
+    )
+    return result
+
+
+def _missing_reason(states, model_states, game_id, model, horizon):
+    state = (states or {}).get(game_id, {}).get(model, {})
+    if state.get("reason") and state.get("reason") != "NO_POSTKICKOFF_SHADOW_PUBLICATION":
+        return state["reason"]
+    model_state = (model_states or {}).get(model, {})
+    if model_state.get("status") == "BLOCKED" and model_state.get("reason"):
+        return model_state["reason"]
+    return f"NO_SAVED_VALID_{horizon}_SHADOW_FORECAST_BEFORE_CUTOFF"
+
+
+def _operational_coverage(rows, states, model_states, model, horizon):
+    missing = [row for row in rows if row["coverage"] == "MISSED"]
+    return {
+        "eligible_games": len(rows),
+        "forecasted": sum(row["prediction_id"] is not None for row in rows),
+        "settled": sum(
+            row["prediction_id"] is not None and row["result"] is not None for row in rows
+        ),
+        "awaiting_result": sum(
+            row["prediction_id"] is not None and row["result"] is None for row in rows
+        ),
+        "scheduled": sum(row["coverage"] == "SCHEDULED" for row in rows),
+        "due": sum(row["coverage"] == "DUE" for row in rows),
+        "missed": len(missing),
+        "missing_predictions": [
+            {
+                "game_id": row["game_id"],
+                "reason": _missing_reason(states, model_states, row["game_id"], model, horizon),
+            }
+            for row in missing
+        ],
+    }
+
+
+def score_shadow(games, records, clock, starts, *, policy=None, states=None, model_states=None):
     """Freeze latest pregame shadow and its paired baseline, never choose by outcome."""
     cards = {}
     for model, model_records in records.items():
-        eligible = [g for g in games if g.get("kickoff") and _instant(g["kickoff"]) > starts[model]]
+        collection_start = _instant(policy["collection_start"]) if policy else starts[model]
+        eligible_after = max(starts[model], collection_start)
+        eligible = [
+            g for g in games if g.get("kickoff") and _instant(g["kickoff"]) > eligible_after
+        ]
         horizon_cards = {}
         for horizon in ("LATEST", *ORIGINS):
             rows, pairs, baseline_rows = [], [], []
@@ -114,7 +233,11 @@ def score_shadow(games, records, clock, starts):
                     and _valid_prediction(p, game, kick, clock, allow_challenger=True)
                 ]
                 selected = max(candidates, key=_prediction_time) if candidates else None
-                row = _metrics_row(game, selected, clock)
+                row = (
+                    _horizon_metrics_row(game, selected, clock, horizon, policy)
+                    if policy and horizon in policy["horizon_seconds"]
+                    else _metrics_row(game, selected, clock)
+                )
                 rows.append(row)
                 if selected and row["result"] is not None:
                     baseline = selected["paired_baseline"]
@@ -124,9 +247,9 @@ def score_shadow(games, records, clock, starts):
                         raise ValueError("SHADOW_PAIRED_BASELINE_INVALID")
                     baseline_rows.append(_metrics_row(game, baseline, clock))
                     pairs.append(row)
-            a, b = _score_rows(pairs), _score_rows(baseline_rows)
+            a, b = _score_with_uncertainty(pairs), _score_with_uncertainty(baseline_rows)
             horizon_cards[horizon] = {
-                "summary": _score_rows(rows),
+                "summary": _score_with_uncertainty(rows),
                 "games": rows,
                 "paired_comparison": {
                     "n": len(pairs),
@@ -137,11 +260,23 @@ def score_shadow(games, records, clock, starts):
                     if pairs
                     else None,
                     "delta_brier": a["multiclass_brier"] - b["multiclass_brier"] if pairs else None,
+                    "small_sample": bool(
+                        policy
+                        and a["winner_accuracy_denominator"]
+                        < policy["small_sample_non_ties"]
+                    ),
+                    "brier_convention": policy["brier_convention"] if policy else None,
                     "interpretation": "Shadow minus its frozen production reference at the shadow horizon. Negative favors shadow.",
                 },
             }
+            if policy and horizon in policy["horizon_seconds"]:
+                horizon_cards[horizon]["operational_coverage"] = _operational_coverage(
+                    rows, states, model_states, model, horizon
+                )
         cards[model] = {
             "prospective_start": stamp(starts[model]),
+            "collection_start": stamp(collection_start),
+            "primary_horizon": policy["primary_horizon"] if policy else None,
             "eligible_games": len(eligible),
             "excluded_before_start": len(games) - len(eligible),
             "horizons": horizon_cards,
@@ -214,12 +349,16 @@ def run_shadow(view, root, cfg, clock, *, predictor=None):
         raise ValueError("ZERO_DOLLAR_GUARD")
     at = clock()
     specs = cfg.get("shadow_models", [])
+    comparison_policy = (
+        freeze_live_comparison_policy(root, cfg) if cfg.get("live_model_comparison") else None
+    )
     output = {
         "status": "SHADOW_ONLY" if specs else "COLLECTING_INPUTS",
         "production_change": "NONE",
         "models": {},
         "games": {},
         "scorecards": {},
+        "comparison_policy": comparison_policy,
     }
     all_models, starts = {}, {}
     current_finals = _current_finals(view, at)
@@ -580,13 +719,22 @@ def run_shadow(view, root, cfg, clock, *, predictor=None):
         output["models"][name]["improvement_id"] = journal(
             root / "analysis", "shadow-improvements", observation
         )
-    output["scorecards"] = score_shadow(view["games"], all_models, clock(), starts)
+    output["scorecards"] = score_shadow(
+        view["games"],
+        all_models,
+        clock(),
+        starts,
+        policy=comparison_policy,
+        states=output["games"],
+        model_states=output["models"],
+    )
     output["report_id"] = journal(
         root / "analysis",
         "shadow-reports",
         {
             "models": output["models"],
             "scorecards": output["scorecards"],
+            "comparison_policy": comparison_policy,
             "decision": "NO_PROMOTION",
         },
     )

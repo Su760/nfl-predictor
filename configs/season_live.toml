@@ -48,13 +48,22 @@ postgame_enabled = true
 postgame_refresh_seconds = 7200
 postgame_summary_url = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/summary?event={event_id}"
 
-# Prospectively archived challenger evidence; no automatic production promotion.
-shadow_enabled = true
 # Current nflverse release supplements the immutable legacy QB history source.
 qb_state_supplements = [
   { season = 2025, url = "https://github.com/nflverse/nflverse-data/releases/download/stats_player/stats_player_week_2025.parquet" },
   { season = 2026, url = "https://github.com/nflverse/nflverse-data/releases/download/stats_player/stats_player_week_2026.parquet" },
 ]
+
+# Prospectively archived challenger evidence; no automatic production promotion.
+shadow_enabled = true
+
+[live_model_comparison]
+schema_version = "live-model-comparison-v1"
+collection_start = "2026-09-24T00:11:30.920767Z"
+primary_horizon = "T60"
+secondary_horizons = ["T72"]
+accuracy_interval = "wilson_95"
+small_sample_non_ties = 30
 
 [[shadow_models]]
 name = "elo-calibration-fa15c047"

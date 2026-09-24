@@ -88,6 +88,115 @@ def candidate(*args):
     }
 
 
+def enable_live_comparison(cfg, at):
+    cfg["live_model_comparison"] = {
+        "schema_version": "live-model-comparison-v1",
+        "collection_start": stamp(at),
+        "primary_horizon": "T60",
+        "secondary_horizons": ["T72"],
+        "accuracy_interval": "wilson_95",
+        "small_sample_non_ties": 30,
+    }
+
+
+def test_live_comparison_policy_freezes_models_cutoffs_outcomes_and_metrics(tmp_path):
+    at, _kick, _view, cfg = fixture(tmp_path)
+    enable_live_comparison(cfg, at)
+    policy = shadow.freeze_live_comparison_policy(tmp_path, cfg)
+    saved = json.loads((tmp_path / "shadow/comparison-policy.json").read_text())
+
+    assert saved == policy
+    assert policy["collection_start"] == stamp(at)
+    assert policy["primary_horizon"] == "T60"
+    assert policy["secondary_horizons"] == ["T72"]
+    assert policy["horizon_seconds"] == {"T60": 3600, "T72": 259200}
+    assert policy["origin_window_seconds"] == 600
+    assert policy["models"] == [
+        {
+            "name": "qb-test",
+            "kind": "qb",
+            "artifact_sha256": cfg["shadow_models"][0]["artifact_sha256"],
+            "prospective_start": stamp(at),
+        }
+    ]
+    assert policy["outcomes"] == "latest observed official FINAL; retractions unresolved"
+    assert policy["ties"] == (
+        "excluded from winner accuracy; included in three-outcome Brier and log loss"
+    )
+    assert policy["brier_convention"] == "sum of three squared outcome errors; range 0-2"
+    assert policy["promotion"] == "manual review only; no automatic production rewrite"
+
+    cfg["live_model_comparison"]["collection_start"] = stamp(at + timedelta(seconds=1))
+    with pytest.raises(ValueError, match="IMMUTABLE_RECORD_CONFLICT"):
+        shadow.freeze_live_comparison_policy(tmp_path, cfg)
+
+
+def test_live_comparison_scores_identical_games_and_exposes_missing_input_coverage(tmp_path):
+    at, kick, view, cfg = fixture(tmp_path)
+    enable_live_comparison(cfg, at)
+    due = kick - timedelta(hours=1)
+    shadow.run_shadow(view, tmp_path, cfg, lambda: due, predictor=candidate)
+    first = view["games"][0]
+    records = [
+        row
+        for row in all_records(tmp_path / "shadow/qb-test", first["game_id"])
+        if row["origin"] == "T60"
+    ]
+    assert len(records) == 1
+
+    missing = copy.deepcopy(first)
+    missing.update(game_id="2030_01_BUF_NYJ", home="NYJ", away="BUF")
+    first["outcomes"] = missing["outcomes"] = [
+        {
+            "version": 1,
+            "observed_at": stamp(kick + timedelta(hours=4)),
+            "status": "FINAL",
+            "home_score": 7,
+            "away_score": 20,
+        }
+    ]
+    policy = shadow.freeze_live_comparison_policy(tmp_path, cfg)
+    states = {
+        missing["game_id"]: {
+            "qb-test": {"status": "FALLBACK", "reason": "QB_INJURY_EVIDENCE_UNAVAILABLE"}
+        }
+    }
+    card = shadow.score_shadow(
+        [first, missing],
+        {"qb-test": records},
+        kick + timedelta(hours=5),
+        {"qb-test": at},
+        policy=policy,
+        states=states,
+    )["qb-test"]
+    t60 = card["horizons"]["T60"]
+
+    assert card["collection_start"] == stamp(at)
+    assert card["primary_horizon"] == "T60"
+    assert t60["operational_coverage"] == {
+        "eligible_games": 2,
+        "forecasted": 1,
+        "settled": 1,
+        "awaiting_result": 0,
+        "scheduled": 0,
+        "due": 0,
+        "missed": 1,
+        "missing_predictions": [
+            {
+                "game_id": missing["game_id"],
+                "reason": "QB_INJURY_EVIDENCE_UNAVAILABLE",
+            }
+        ],
+    }
+    paired = t60["paired_comparison"]
+    assert paired["n"] == 1 and paired["game_ids"] == [first["game_id"]]
+    assert paired["shadow"]["correct"] == 1
+    assert paired["baseline"]["correct"] == 0
+    assert len(paired["shadow"]["accuracy_interval_95"]) == 2
+    assert paired["small_sample"] is True
+    assert paired["brier_convention"] == "sum of three squared outcome errors; range 0-2"
+
+
 def test_shadow_is_immutable_independent_and_duplicate_safe(tmp_path):
     at, kick, view, cfg = fixture(tmp_path)
     before = copy.deepcopy(view)

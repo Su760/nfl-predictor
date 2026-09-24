@@ -344,3 +344,27 @@ label only if saved artifacts prove it misleading; declare that file before edit
   correct only proven misleading labels. Run checks proportional to documentation/UI changes.
 - [x] Review for secrets/private paths, commit and push only V2, then verify the remote SHA and
   report whether the old claim is substantiated and whether comparable evidence shows regression.
+
+## Prospective live model comparison — September 23, 2026
+Authorized bounded implementation from V2 commit `c5ac698`; reuse the existing shadow forecast
+archive, scheduler, publication receipts and scorecards. Production Elo, completed-game forecasts,
+model artifacts and unrelated main-worktree changes remain immutable. No model search, promotion,
+paid service, betting feature or second forecasting/ledger pipeline.
+
+Scope: `ops/season_shadow.py`, `configs/season_live.toml`, `tests/test_season_shadow.py`,
+`ops/viewer/app.js`, `tests/test_week1_viewer.py`, `docs/runbooks/season-live.md`, and this ledger.
+
+- [x] Freeze one immutable comparison policy containing model/artifact identities, prospective
+  start, T60 primary and T72 secondary horizons, cutoff windows, latest-final outcome handling,
+  tie/proper-score conventions, Wilson uncertainty, small-sample threshold and manual promotion.
+- [x] Extend the existing shadow scorecards with horizon-aware operational obligations, explicit
+  missing reasons, identical-game Elo comparisons, correct/total, accuracy intervals, Brier and
+  log loss. Include only games whose outcomes were unknown when the comparison policy froze.
+- [x] Add a compact live comparison section to `/performance`; keep reconstructed historical
+  research separate and show blocked models and small samples without hiding missing forecasts.
+- [x] Verify immutable publication/cutoff behavior, matching, missing inputs and scoring with
+  focused red/green tests; run the affected broader tests, Ruff/JS/diff/secrets checks.
+- [ ] Audit the live worker, source freshness, current challenger state and upcoming T72/T60
+  obligations. Use only the supported scheduler; record missed cutoffs without backfilling.
+- [ ] Update the runbook, commit and push only V2, verify the remote SHA and report whether the
+  existing local worker can collect the frozen comparison unattended.
