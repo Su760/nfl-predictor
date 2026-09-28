@@ -389,3 +389,270 @@ Scope: `ops/viewer/app.js`, `tests/test_week1_viewer.py`, `tests/test_season_liv
   code only if a reproducible defect exists. Preserve expired misses and prohibit relabel/backfill.
 - [x] Verify focused tests, live health and sleep assertion; update the runbook, scan for secrets,
   commit/push only V2 and verify the remote SHA.
+
+## ATL–GB archived prediction postmortem
+
+Authorized scope: this ledger and `docs/runbooks/season-live.md`; add a reproducible private
+audit script only if needed and declare its path first. Preserve the live worker and archives.
+Atlanta 55–60% is the user's estimate, not a verified reference probability.
+
+- [x] Recover the official revision, original inputs and horizon/shadow records.
+- [x] Reproduce the frozen Elo history, offseason transition and each 2026 update; verify
+  mappings, ordering, score signs, availability, coverage and default ratings.
+- [x] Review original QB/injury/market evidence and existing historical calibration bands.
+- [x] Document quantified causes, defects/limitations/unknowns, validation and one next action.
+
+Outcome: official revision `6f5cfab3…` reproduces exactly: GB 72.499827%, ATL 27.102446%,
+tie 0.397727%. Atlanta's CAR loss causes −47.263831 Elo; the final GB−ATL gap is105.931396,
+plus65 home-field points. T72 is identical; calibration reduces GB to66.918192%, while the
+valid pregame QB residual increases GB to74.773834%. Archived pregame moneylines imply
+GB67.503125% conditional/no-vig, not an Atlanta favorite. No probability-path code/data defect
+found; no live model/archive change. The existing missed T60/FINAL records remain missed.
+
+Reproducible read-only command and complete provenance are in the ATL–GB section of
+`docs/runbooks/season-live.md`. Executed the documented command successfully: all32 saved
+ratings match exactly, all32 prior FINAL scores match the original pregame ESPN capture after
+canonical team normalization, source/config/history/state hashes match, and official selection,
+result chronology and probabilities verify. Separate checks validate shadow receipts, paired
+baseline, pregame QB state/raw hashes and arithmetic, plus saved historical reliability-report
+hash/bands. Initial scratch audit attempts used the wrong RatingSnapshot attribute and omitted
+ESPN's LAR→LA alias; both were audit-script mistakes, corrected using existing schemas/helpers,
+not production failures. `git diff --check` passes. No test-suite rerun for documentation-only
+changes, no search/training, no commit/push. Existing retention ledger work is preserved.
+
+Proposed next experiment only: one frozen expected-QB-versus-recent-participation residual,
+with verifiable pre-cutoff evidence, chronological fitting, matched T60 games, paired log loss
+as primary and uncertainty/coverage reported. Do not fit to ATL–GB or automatically promote.
+
+### ATL–GB continuation — September 26, 2026
+
+The current request authorizes completing the existing postmortem's missing pregame-source
+and feasibility check. Scope: this ledger and `docs/runbooks/season-live.md` only. No live
+model, policy, worker, forecast, archive, or private experiment artifact changes.
+
+- [x] Reuse the exact archived Elo replay and existing calibration, QB, EPA, retention,
+  and market evaluations; perform no duplicate fit or search.
+- [x] Check dated primary pregame evidence against T72 and the official UPDATE, keeping
+  public availability distinct from original runtime capture.
+- [x] Decide whether a matched, chronological QB-change evaluation is feasible from
+  preserved historical pregame inputs; record precise gaps and minimal prospective step.
+
+Bounded step completed: no probability-path defect was demonstrated. Atlanta officially
+named Penix the Week 3 starter before T72; Rush started Weeks 1–2. The archived QB
+challenger already used Penix at UPDATE and increased GB from 72.50% to 74.77%. GB's
+Banks and Bako-Bewele absences were known before UPDATE and archived in injuries, but
+no validated line adjustment exists. Club inactives were publicly posted pregame; the
+runtime marked them MISSING, so they cannot be retroactively inserted into the forecast.
+The one archived near-UPDATE two-sided price still favored GB (67.50% no-vig), and its
+provider quote time is unknown. None of these facts proves an Atlanta-favored probability.
+
+No offline QB-change comparison was run. Historical expected starter identities and
+availability lack original T60 issue/update/capture receipts, while actual starter IDs
+are retrospective. Prior-game QB attempts and passing EPA exist in a rebuilt player
+dataset but lack the complete as-of linkage to those historical pregame snapshots.
+Existing source paths already retain prospective depth, injury, QB-stat and outcome
+receipts. The smallest prospective collection addition is an immutable research-only
+T60 join per game: both expected QB IDs/statuses and source times/hashes, each team's
+recent completed-game QB IDs and pass attempts/team totals with final-observed times
+and stats-source times/hashes, plus explicit missing reasons. Reuse the existing Elo
+reference and QB shadow; evaluate only after enough future matched games exist. No
+historical scores or promotion claim are manufactured. See the runbook for source URLs,
+cutoff distinctions, and prior matched accuracy/Brier/log-loss/coverage/uncertainty.
+
+### Re-plan: demonstrated inactives parser defect
+
+The preserved 19:01:58 CDT NFL index linked the ATL–GB article and the worker fetched
+that article at 19:01:59 CDT. Its `datePublished`/`dateModified` are both 17:50:21 CDT,
+before kickoff. `ops/season_sources.py:469-471` rejects it solely because the full
+matchup occurs in the headline while the description says `Falcons-Packers`. Replacing
+only that description in memory allowed the existing parser to read both team sections.
+This is a demonstrated context-capture defect, not a probability-formula defect;
+production Elo does not use inactives. Expand scope only to `ops/season_sources.py` and
+`tests/test_season_sources.py` for a strict abbreviated-matchup regression and isolated
+parser fix. Keep the existing two documentation files in scope. Preserve all original
+receipts/forecasts and the running live comparison; do not retroactively publish.
+
+- [x] Add regression for exact abbreviated away/home identity and a wrong-pair rejection;
+  confirm it fails on the original parser.
+- [x] Accept the verified abbreviated description only when the headline has the full
+  away-at-home matchup; rerun focused source tests and the archived capture read-only.
+- [x] Reconcile the runbook/ledger with the defect and verify no archive or model changes.
+
+Outcome: the new positive regression failed on the original parser with
+`OFFICIAL_INACTIVES_TEAMS_MISMATCH`; a reversed short description already failed as
+required. The isolated identity check now accepts the official `Falcons-Packers` form
+only alongside a full, ordered headline. The exact captured article parses 11 inactive
+rows for both teams using its original 17:50:21 CDT publication and 19:01:59 CDT capture.
+Focused tests: 21 passed/1 optional real-capture fixture skipped. Full suite: 1,314
+passed/1 same skip. Changed-file Ruff passed with `--no-cache`; the first default-cache
+attempt could not write `.ruff_cache` due sandbox permissions. `git diff --check` passed.
+No live model version, Elo probability, scoring policy, archived prediction or receipt was
+rewritten; the prior `MISSING` remains the historical record. This defect explains a
+missing context input, not the GB-favored forecast. One adjacent parser flag mismatch
+(`emergency third-string QB` versus its accepted phrase) is reported separately, not fixed.
+The first post-fix replay stopped with `AssertionError` at its all-source-current guard,
+because it correctly detected the parser edit. The runbook now compares only unchanged
+probability source files to their captured bundle and uses frozen-config team aliases;
+the complete read-only replay again passes all 32 ratings, results and exact probabilities.
+
+## Prospective expected-QB change evidence — September 28, 2026
+
+Authorized continuation of the ATL–GB postmortem. Preserve existing dirty edits, production
+Elo, frozen calibration/QB comparison, and every archived forecast. Scope: this ledger,
+`ops/season_shadow.py`, new `ops/season_qb_evidence.py`, new
+`tests/test_season_qb_evidence.py`, `configs/season_live.toml`, and
+`docs/runbooks/season-live.md`. The config flag activates only this research collector; the existing parser
+and parser-test edits are verification inputs only.
+
+- [x] Recover the parser diff, focused tests, archived ATL–GB source, and worker snapshot;
+      trace whether emergency-QB metadata affects eligibility before considering a fix.
+- [x] Archive immutable T60 expected-QB/availability evidence with distinct capture and
+      provider times, prior finalized-game QB participation and exact source receipts.
+- [x] Link each evidence record to saved T60 forecast revisions and model versions without
+      changing the live comparison or backfilling completed games.
+- [x] Add focused cutoff, missing-data, source identity and archive-preservation tests;
+      inspect a current read-only worker snapshot and Sunday scorecards.
+- [x] Preregister one future comparison and record collection status and evidence gaps.
+
+Verification: 106 focused source/QB/shadow/live/scoring tests passed; one optional real-capture
+fixture skipped as unavailable. Changed-file Ruff and `git diff --check` passed. A direct
+read-only replay of the original NFL ATL–GB article validates its SHA and yields 11 rows
+for both teams; original official revision `6f5cfab3…` still carries its original
+`MISSING` inactives input and 72.499827% GB probability. The new per-game participation
+join resolved both PHI and CHI's two prior 2026 games from a saved QB-state artifact.
+A temporary offline `run_shadow` T60 integration published a QB test forecast and
+archived one linked evidence row, retaining an explicit missing official T60 reference
+and missing QB-stat reason; it touched no live archive.
+The scoped `mypy ops/season_qb_evidence.py` command failed with 599 errors across 11
+`ops` modules including the new module because this tree does not typecheck that
+untyped ops import graph; no clean mypy claim is made.
+
+At the 2026-09-28 16:33Z read-only snapshot the existing local worker was healthy. It
+was restarted once through its existing launchd job to load the new research flag; new
+PID 42137 was healthy, next scheduled run 17:48Z, and no source cycle was forced.
+The private QB-change archive still has zero rows because no future T60 window has
+occurred. The next PHI–CHI T60 window is 23:05–23:25Z; that game has only two prior
+current-season games per team and cannot enter the preregistered three-game comparison.
+At that snapshot the saved QB shadow refresh was blocked by a free stats download timeout. New
+evidence will record source/forecast missing reasons if that persists. Sunday Sep27:
+14/14 results settled; official latest 14/14 delivered, 11 correct; calibration latest
+14/14, 10 correct; QB latest 14/14, 11 correct. T60 delivery was official 14/14,
+calibration 14/14, QB 13/14 (SEA–WAS missing). No coefficient fit, model promotion,
+retrospective evidence backfill, or outcome-based tuning occurred.
+
+## Bounded QB evidence follow-up — September 28, 2026
+
+Authorized scope: `ops/season_qb.py`, `ops/season_shadow.py`,
+`configs/season_live.toml`, `tests/test_season_qb.py`,
+`tests/test_season_shadow.py`, `ops/season_qb_evidence.py`, `ops/season_sources.py`,
+`tests/test_season_qb_evidence.py`, and this roadmap. Preserve the live model,
+comparison policy, cutoff rules, saved forecasts, and private archives.
+
+- [x] Reproduce the transient stats-fetch failure; add a bounded, configured retry
+      through the existing raw capture path, with a regression test proving failures
+      do not create fresh receipts or use old bytes.
+- [x] Verify normal worker collection, actual schedule and the PHI–CHI T60 obligation;
+      separate not due, history-ineligible, missing evidence, and collection failure.
+- [x] Compare Sunday official and QB T60 forecasts on identical settled games; report
+      calibration separately without tuning or promotion.
+- [x] Run comparable baseline/current mypy checks and repair only introduced relevant
+      diagnostics, if any.
+- [x] Record a deferred Fantasy Football milestone and verify focused tests plus the
+      current read-only worker snapshot.
+
+Retry root cause: `ops/season_qb.py` called the 30-second source fetch once per stats
+file, so one transient curl exit 28 blocked the whole optional QB state refresh.
+Configured two attempts reuse the existing `_fetch` hash-checked raw/capture archive;
+only a completed response can receive a new receipt. Existing older receipts are neither
+read as a fallback nor assigned a new capture time. The next saved worker cycle after
+the reported timeout succeeded without intervention; that earlier timeout was transient.
+
+Collection at the 18:00Z worker view: normal `run_shadow` returned
+`qb_change_evidence={status:COLLECTING,saved:[]}`; the private archive had zero rows.
+No game after the 18:00Z policy freeze had reached T60. The only remaining Monday game
+is PHI at CHI, kickoff 00:15Z September 29 (19:15 CDT September 28); T60 target 23:15Z,
+window 23:05–23:25Z. The normal worker's `next_check` includes the exact T60 target.
+PHI and CHI each have two prior finalized 2026 games, so the row should be collected
+but remains ineligible for the preregistered three-game comparison. The 18:00Z inputs
+had depth and injury evidence; official game inactives were missing. A continuing stats
+fetch failure must appear as missing QB-state evidence or collector `BLOCKED`, never
+as a fresh reuse of old bytes. No earlier game was backfilled.
+
+Sunday Sep 27, T60, identical 13 games with both frozen forecasts and final outcomes:
+official Elo 11/13, log loss .520387, three-outcome Brier .337420; QB shadow 11/13,
+log loss .459791, Brier .287113. Official T60 delivered 14/14 Sunday; QB 13/14,
+missing SEA–WAS. Calibration is separate: 14/14 delivered and settled, 10/14 correct,
+log loss .617426, Brier .422409; its paired Elo reference on those 14 was 11/14,
+log loss .585903, Brier .395947. No small-sample tuning or promotion.
+
+Comparable mypy baseline at HEAD: 575 strict errors across the imported `ops` graph.
+The first follow-up check had 586, including 11 new collector-boundary diagnostics.
+The completed typed-boundary check has 571, zero collector diagnostics, and zero
+introduced normalized diagnostics versus HEAD. Four inherited parser-narrowing
+diagnostics were resolved; the remaining 571 inherited errors remain outside scope.
+Focused source/QB/shadow/evidence tests: 74 passed, one optional real-capture fixture
+skipped; changed-file Ruff and `git diff --check` passed.
+The existing LaunchAgent was restarted to load the tested retry code without forcing
+a source cycle. Read-only worker snapshot at 18:27Z: healthy PID 82199, prior view
+18:00Z, next scheduled check 20:00:43Z, QB shadow valid, collector `COLLECTING`
+with zero rows. Next checkpoint is that scheduled worker check, followed by the
+PHI–CHI T60 window; record any missing inactives or failed stats explicitly.
+
+## Deferred milestone — Fantasy Football
+
+Future design only; no feature or model work in this follow-up. Before building,
+measure current-season provider coverage, update latency, stable player/team IDs,
+and null rates for team/player usage; target, snap, air-yard and route shares/metrics
+where available; scoring-specific expected and actual fantasy points; drops and
+nullified-play context; and week-to-week role trends. Keep historical opportunity
+observations separate from future usage/point projections, with explicit forecast
+cutoffs and uncertainty. My platform is ESPN Fantasy Football. Plan to import my
+ESPN league's scoring settings and roster slots, my team, every other league team,
+and currently available players before personalized waiver and trade comparisons.
+At implementation start, verify ESPN's currently supported access/authentication
+method and fields; keep a manual-import fallback for the same league data. Use the
+verified coverage and league rules. No fabricated zeros for missing routes/targets
+or unsupported scoring rules. Start only after a new approved milestone and current
+coverage audit; do not build the fantasy feature in this milestone.
+
+## Finish QB collector reliability milestone — September 28, 2026
+
+Authorized scope: collector/season_live type boundary, the existing QB retry and
+collector diffs, related tests/config/runbook, this roadmap and lessons. Stage only
+reviewed related source and documentation; exclude private data and unrelated work.
+
+- [x] Resolve the eleven collector boundary mypy diagnostics with accurate local
+      types; compare the same strict command against the same HEAD baseline.
+- [x] Read the latest worker state, QB source receipts and real archive; verify
+      latest successful refresh, failure reasons, collection row count and exclusion.
+- [x] Reprint Sunday same-game T60 metrics from saved frozen reports, calibration
+      separately; keep model, policy and archives unchanged.
+- [x] Amend deferred fantasy milestone for ESPN scoring, roster slots, all teams,
+      available players, access verification at implementation and manual fallback.
+- [x] Run focused tests/lint/diff checks; review staged files, commit locally on V2,
+      verify clean scope and record the next scheduled collection window.
+
+Comparable strict mypy command: `.venv/bin/mypy --no-incremental ops/season_shadow.py`
+from both an isolated HEAD archive and this worktree. HEAD 575 errors, current 571;
+normalizing source and embedded line numbers yields no newly introduced diagnostics.
+The collector uses narrow typed callable contracts for the actual worker helpers,
+with no broad ignore, disabled rule, or runtime change.
+
+Runtime verification at the 20:01Z normal worker cycle: QB refresh succeeded and
+saved artifact `14ac2c9d…`, with `data_as_of=20:01:35.946925Z`. Its legacy, 2025,
+and 2026 source captures are 20:01:35.099735Z, 20:01:35.547097Z, and
+20:01:35.946925Z; the 2026 provider Last-Modified is 17:40:27Z. No current QB
+refresh blocker is reported. An immutable earlier shadow report
+`aa53f5f5…` records curl exit 28 after 30.141 seconds and 5,158,215 of 5,621,855
+bytes, confirming the transient timeout. No stale capture was relabeled.
+
+At the 20:01Z view, the normal collector reports `COLLECTING`, zero saved rows,
+and the private archive has zero real rows. Of 272 scheduled-season entries, 47
+kickoffs predate the prospective policy start, 201 verified kickoffs are future,
+and 24 have no verified kickoff. Thus none is T60-due now; no collector failure
+is reported. PHI–CHI is the next due row at 23:05–23:25Z, but each club has only
+two prior finalized 2026 games and the current official game inactives are missing.
+The three-prior-game comparison rule and source/capture cutoffs remain unchanged.
+Focused source/QB/shadow/collector/live/scoring tests: 107 passed, one optional
+real-capture fixture skipped; changed-file Ruff and `git diff --check` passed.
+Commit only after the staged diff and newly tracked file list are inspected.

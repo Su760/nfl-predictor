@@ -8,6 +8,7 @@ import re
 import tomllib
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any, cast
 
 from season_live import (
     all_records,
@@ -337,6 +338,7 @@ def refresh_qb_state(view, artifact, spec, root, cfg, clock):
     finalized += _current_finals(view, clock())
     runtime["qb_state_through_season"] = cfg["season"]
     runtime["qb_state_supplements"] = cfg.get("qb_state_supplements", [])
+    runtime["qb_stats_fetch_attempts"] = cfg.get("qb_stats_fetch_attempts", 1)
     try:
         return refresh_state(artifact, runtime, root, finalized, clock)
     except Exception as error:
@@ -365,6 +367,7 @@ def run_shadow(view, root, cfg, clock, *, predictor=None):
     code_root = Path(__file__).resolve().parents[1]
     code_files = [
         "ops/season_shadow.py",
+        "ops/season_qb_evidence.py",
         "ops/season_qb.py",
         "ops/season_probability.py",
         "configs/season_probability.toml",
@@ -719,6 +722,17 @@ def run_shadow(view, root, cfg, clock, *, predictor=None):
         output["models"][name]["improvement_id"] = journal(
             root / "analysis", "shadow-improvements", observation
         )
+    if cfg.get("qb_change_evidence_enabled"):
+        try:
+            from season_qb_evidence import archive_t60
+
+            output["qb_change_evidence"] = archive_t60(
+                view, root, cfg, clock(), cast(dict[str, Any], output["models"])
+            )
+        except Exception as error:  # noqa: BLE001 - optional research must not block production
+            output["qb_change_evidence"] = {
+                "status": "BLOCKED", "reason": f"{type(error).__name__}: {error}"
+            }
     output["scorecards"] = score_shadow(
         view["games"],
         all_models,

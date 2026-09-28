@@ -234,6 +234,45 @@ def test_refresh_state_archives_free_source_lineage(tmp_path, monkeypatch):
     )
 
 
+def test_refresh_stats_retries_timeout_without_reusing_stale_capture(tmp_path, monkeypatch):
+    calls = []
+    fresh = b"fresh-parquet"
+    url = "https://github.com/current"
+    cfg = {"qb_stats_fetch_attempts": 2, "allowed_hosts": ["github.com"],
+           "transport": "curl", "request_timeout_seconds": 30}
+
+    def download(url, cfg, root):
+        calls.append(url)
+        if len(calls) == 1:
+            raise ValueError("SOURCE_FETCH_FAILED github.com exit=28: curl timeout")
+        return fresh, None
+
+    monkeypatch.setattr(season_qb.season_sources, "_curl_download", download)
+    body, saved = season_qb._fetch_stats(url, cfg, tmp_path, lambda: NOW)
+    assert calls == [url, url]
+    assert body == fresh
+    assert saved["captured_at"] == season_qb._stamp(NOW)
+    assert saved["raw_sha256"] == season_qb.sha256(fresh).hexdigest()
+    assert list((tmp_path / "captures").glob("*.json"))
+    assert list((tmp_path / "raw").glob("*.parquet"))
+
+    calls.clear()
+    def always_timeout(url, cfg, root):
+        calls.append(url)
+        raise ValueError("SOURCE_FETCH_FAILED github.com exit=28: curl timeout")
+
+    empty_root = tmp_path / "failed"
+    stale_receipt = {**saved, "captured_at": "2026-09-01T00:00:00Z"}
+    season_qb.week1_live.write_once(empty_root / "captures" / "stale.json", stale_receipt)
+    season_qb.week1_live.write_once(empty_root / "raw" / f"{saved['raw_sha256']}.parquet", fresh)
+    monkeypatch.setattr(season_qb.season_sources, "_curl_download", always_timeout)
+    with pytest.raises(ValueError, match="SOURCE_FETCH_FAILED"):
+        season_qb._fetch_stats(url, cfg, empty_root, lambda: NOW)
+    assert calls == [url, url]
+    assert [path.name for path in (empty_root / "captures").glob("*.json")] == ["stale.json"]
+    assert (empty_root / "captures" / "stale.json").read_text() == season_qb._canonical(stale_receipt).decode()
+
+
 def test_artifact_roundtrip_and_policy_gate(tmp_path):
     value = season_qb.fit_qb(
         [row("d", 2023, 1, 1)],

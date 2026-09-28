@@ -7,6 +7,7 @@ import io
 import itertools
 import json
 import math
+from collections.abc import Callable
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
@@ -390,6 +391,22 @@ def write_artifact(root: Path, artifact: dict[str, Any]) -> Path:
     return path
 
 
+def _fetch_stats(
+    url: str, cfg: dict[str, Any], root: Path, clock: Callable[[], datetime]
+) -> tuple[bytes, dict[str, Any]]:
+    """Retry transient QB stats downloads; only _fetch archives completed captures."""
+    attempts = int(cfg.get("qb_stats_fetch_attempts", 1))
+    if attempts < 1 or attempts > 3:
+        raise ValueError("QB_STATS_FETCH_ATTEMPTS_INVALID")
+    for attempt in range(attempts):
+        try:
+            return season_sources._fetch(url, cfg, root, clock, "parquet")
+        except ValueError as error:
+            if not str(error).startswith("SOURCE_FETCH_FAILED") or attempt + 1 == attempts:
+                raise
+    raise AssertionError("QB_STATS_FETCH_RETRY_UNREACHABLE")
+
+
 def refresh_state(
     artifact: dict[str, Any],
     cfg: dict[str, Any],
@@ -398,7 +415,7 @@ def refresh_state(
     clock,
 ) -> dict[str, Any]:
     """Refresh lagged QB state without refitting the frozen coefficient."""
-    body, receipt = season_sources._fetch(cfg["qb_player_stats_url"], cfg, root, clock, "parquet")
+    body, receipt = _fetch_stats(cfg["qb_player_stats_url"], cfg, root, clock)
     frame = pl.read_parquet(io.BytesIO(body))
     required = {
         "player_id",
@@ -417,7 +434,7 @@ def refresh_state(
     components = [receipt]
     frames = [frame.select(sorted(required))]
     for source in cfg.get("qb_state_supplements", []):
-        raw, captured = season_sources._fetch(source["url"], cfg, root, clock, "parquet")
+        raw, captured = _fetch_stats(source["url"], cfg, root, clock)
         current = pl.read_parquet(io.BytesIO(raw))
         if "recent_team" not in current.columns and "team" in current.columns:
             current = current.rename({"team": "recent_team"})

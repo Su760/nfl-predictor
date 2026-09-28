@@ -10,3 +10,5 @@
 2026-09-11 | User prioritized readable game analysis and deferred betting/playoffs | Verify current model from saved live evidence; explain only preserved forecast inputs; keep simulations out of this milestone and distinguish missing forecasts from losing picks.
 
 2026-09-12 | User clarified inspected 2025 holdout is now a known benchmark | Freeze new experiments before evaluation; reserve future prospective forecasts for untouched evidence, and never use actual target starters as historical expected-starter proof.
+
+2026-09-28 | User required closing the 11 introduced collector mypy diagnostics and specified ESPN fantasy | Compare type checks against the same HEAD baseline, finish relevant type-boundary fixes before claiming validation, and record platform-specific deferred requirements without building them.

@@ -450,7 +450,12 @@ def _inactive_article(
     description = article.get("description")
     published = article.get("datePublished")
     body_text = article.get("articleBody")
-    if not all(isinstance(value, str) for value in (headline, description, published, body_text)):
+    if not (
+        isinstance(headline, str)
+        and isinstance(description, str)
+        and isinstance(published, str)
+        and isinstance(body_text, str)
+    ):
         raise TypeError("OFFICIAL_INACTIVES_ARTICLE_FIELDS_INVALID")
     context = f"{headline} {description}"
     published_time = datetime.fromisoformat(published)
@@ -467,7 +472,13 @@ def _inactive_article(
     if week and int(week.group(1)) != game["week"]:
         raise ValueError("OFFICIAL_INACTIVES_WEEK_MISMATCH")
     expected = f"{game['away_name']} at {game['home_name']}"
-    if any(expected.casefold() not in value.casefold() for value in (headline, description)):
+    short = f"{game['away_name'].split()[-1]}-{game['home_name'].split()[-1]}"
+    short_in_description = re.search(
+        rf"(?<!\w){re.escape(short)}(?!\w)", description, re.IGNORECASE
+    )
+    if expected.casefold() not in headline.casefold() or (
+        expected.casefold() not in description.casefold() and short_in_description is None
+    ):
         raise ValueError("OFFICIAL_INACTIVES_TEAMS_MISMATCH")
     if maximum_age_seconds is None:
         import tomllib

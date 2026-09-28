@@ -1,5 +1,479 @@
 # Continuous season forecasting
 
+## ATL–GB prediction postmortem — 2026-09-26
+
+Conclusion: the archived 72.50% GB forecast reproduces exactly. No probability, team/home,
+score-sign, missing-prior-game or fallback-rating defect was found. This is a limitation of
+results-only Elo, not evidence that Atlanta's true pregame probability was 55–60% (the user's
+estimate). No production configuration, forecast, model artifact or worker was changed.
+
+### Original prediction and evidence
+
+Game `2026_03_ATL_GB` was Atlanta **away**, Green Bay **home**, non-neutral Lambeau Field,
+kickoff September 24 at 19:15 CDT (`2026-09-25T00:15Z`). Times below are CDT; all receipt
+times equal publication times. Probabilities are raw three-outcome probabilities, not rounded
+two-way shares. `R` below means the private `~/nfl-predictor-live-data/season` directory.
+
+| Saved record | Generated / published September CDT | GB home | ATL away | Tie | Revision prefix |
+| --- | --- | ---: | ---: | ---: | --- |
+| Official production UPDATE | 24 19:02:02.911082 / 19:02:02.912242 | 0.7249982719814994 | 0.2710244552912279 | 0.003977272727272727 | `6f5cfab3` |
+| Production T72 | 21 19:09:49.826994 / 19:09:49.828232 | 0.7249982719814994 | 0.2710244552912279 | 0.003977272727272727 | `0bbec7d5` |
+| Calibration T72 (research) | 21 19:09:57.001356 / 19:09:57.002565 | 0.6691819230107625 | 0.32684080426196477 | 0.003977272727272727 | `89859933` |
+| Calibration latest UPDATE (research) | 24 19:03:02.836993 / 19:03:02.838226 | 0.6691819230107625 | 0.32684080426196477 | 0.003977272727272727 | `6e1ab5f2` |
+| QB residual latest UPDATE (research) | 24 19:03:06.991288 / 19:03:06.992522 | 0.7477383363041245 | 0.24828439096860275 | 0.003977272727272727 | `8413c92b` |
+
+Official selection is the latest valid pre-kickoff production revision, **not** a T60 or FINAL
+substitute. Both production horizon records are absent/missed. QB T72 is absent; its original
+production input snapshot records `NO_OFFICIAL_INJURY_REPORT_FOR_GAME_WEEK`, an unsupported
+QB input (`QB_INJURY_EVIDENCE_UNAVAILABLE` in the existing QB guard). Later UPDATE records
+do not repair those horizons. This audit does not re-investigate the delivery interruption.
+
+Exact immutable references (each forecast has sibling `.receipt.json` and `.evidence.json`;
+`all_records` verifies record/receipt/proof hashes and original durability before deadline):
+
+- Official: `R/forecasts/2026_03_ATL_GB/6f5cfab3fd0a2a90923d3bf4a0ce23e666299d5e3ba46d3e407228fcf6f8f3a0.json`.
+  Input snapshot is the embedded `inputs` object. Version `elo-season-v1`, fallback role,
+  source code `fc32d122f04f3212d96ee81ce9473a50d5de4c05`, clean when published.
+- Official model: `R/models/f205f5e696b2e6f653eaede1cf1b591d1a802e908fcd0e723c66ea2b7225d10f.json`;
+  state `a65fea1916019bdaa201846f65bedbcc13748d08d472d00c0a97db4cf3b15dd1`.
+- T72: `R/forecasts/2026_03_ATL_GB/0bbec7d5dd0ba31a977f059fd8277caa7ed0d872a3e7462ab32345e07c63e8c1.json`;
+  model `f577e6af00d3412601a1609e654fa05732d8b6bbee9ca4d0e9476b433677e391`.
+- Calibration under `R/shadow/elo-calibration-fa15c047/forecasts/2026_03_ATL_GB/`:
+  `898599335818c83b686808ccef942e6f941abf0224e48dff6c40163e058ab926.json` (T72),
+  `6e1ab5f26c1782bae0eb740438cd82c1f5bd49aa370c76917a731cf17aa35bad.json` (UPDATE).
+  Model/version `elo-calibration-fa15c047`, artifact
+  `fa15c0472a2b6c101b28d063a029789a214bcc9a422c4bf327ba39eb4c5329d7`.
+- QB under `R/shadow/qb-residual-cdeab16a/forecasts/2026_03_ATL_GB/`:
+  `8413c92b65d2eaad4bd61630a0f26008bedb1e16db8637ccee7f537cf10e67d4.json`.
+  Version `qb-residual-cdeab16a`, frozen definition
+  `cdeab16a5aa58af520a07bcfd78cd6ebf20a54463a6d2809c89a65f89ad1d03b`, pregame state
+  `R/shadow/artifacts/1295f0f01f3990eb7c793b0c33d5d3dc0ede40fabf43d4211ca8a98d8884a989.json`.
+Both latest shadows pair explicitly to official revision `6f5cfab3…`.
+
+Atlanta subsequently won 35–14; the result was first observed September 24 at 22:20:12.313836
+CDT, after kickoff. It was not in the saved model. Official winner score is 0/1, three-class
+sum-of-squared-errors Brier 1.057044 (range 0–2), natural-log loss 1.305546. One loss does not
+identify a true probability or justify changing parameters. T72 has the same scores but is
+not an independent game; T60/FINAL have no forecast to score.
+
+### Exact Elo replay
+
+The original pregame CSV capture is
+`R/captures/d8ed9e656ab38bd6d8cde537441c3e8e148b9c27195e57adc6f8dac0f9247bdc.json`,
+captured September 24 at 19:01:57.933123 CDT, with raw CSV
+`R/raw/4d60156005cbf4efa255321a3a5f8f936cfb8950eeaac0f9fce5cca276a759a4.csv`.
+Its 2,761 completed 2016–2025 regular-season **and playoff** games reproduce history hash
+`8716e3229aa98e791534cf4434e066346799cafc8129c004550e7b9f75e5e7ef`.
+This is the history actually available before this 2026 forecast, not a claim that historical
+result publication timestamps were preserved for each earlier season.
+
+| Rating stage | ATL | GB | GB minus ATL |
+| --- | ---: | ---: | ---: |
+| End of 2025, replayed | 1460.847152 | 1541.946775 | 81.099623 |
+| After offseason: `1505 + (rating−1505) × 2/3` | 1475.564768 | 1529.631183 | 54.066415 |
+| After Week 1 | 1460.921813 | 1508.176557 | 47.254745 |
+| After Week 2 / saved pregame | 1413.657982 | 1519.589378 | 105.931396 |
+
+Offseason adjustments were ATL **+14.717616**, GB **−12.315592**: shrinkage actually reduced
+GB's inherited advantage. All four current-season updates were already available before T72:
+
+| Game, away–home score | Home/away ratings before update | Expected home win share | MOV multiplier | Audited team's change | FINAL first observed CDT |
+| --- | --- | ---: | ---: | ---: | --- |
+| ATL 13–PIT 20 | PIT 1512.076917 / ATL 1475.564768 | 0.6420679325 | 2.0454936473 | ATL −14.642955 | Sep 13 15:18:32.426541 |
+| GB 22–MIN 39 | MIN 1553.275550 / GB 1529.631183 | 0.6248716407 | 2.8596379717 | GB −21.454626 | Sep 13 18:52:16.579092 |
+| CAR 34–ATL 3 | ATL 1460.921813 / CAR 1406.747178 | 0.6650819398 | 3.5532336931 | ATL −47.263831 | Sep 20 15:11:15.192124 |
+| GB 20–NYJ 17 | NYJ 1396.060991 / GB 1508.176557 | 0.4326078568 | 1.3190722986 | GB +11.412821 | Sep 20 15:39:52.565602 |
+
+Per `src/nfl_predictor/ratings/elo.py`, expected home share is
+`q = 1/(1+10^(−(home_rating−away_rating+home_advantage)/400))`.
+`delta_home = 20 × ln(max(abs(home_score−away_score),1)+1)
+× 2.2/(2.2 + winner_rating_gap×0.001) × (actual_home−q)`;
+away change is its negative. Winner gap uses the **winner's** rating minus the loser's,
+without home advantage. Ties use actual_home=0.5. Atlanta's upset loss to lower-rated CAR
+has winner gap −54.174635 and margin 31: a large, correctly signed −47.263831 update.
+
+The final raw gap is **105.931396**, giving 64.789293% GB without home advantage. Lambeau's
+fixed **+65** points makes the gap **170.931396**, yielding conditional non-tie GB share
+**0.727893302160547**. The historical regular-season tie layer reserves **0.003977272727272727**;
+`p_home=(1−p_tie)q`, `p_away=(1−p_tie)(1−q)`. This exactly gives 72.499827% / 27.102446%.
+Home advantage adds about **8.00 percentage points** to the non-tie share; the tie layer removes
+0.289503 points from GB. Atlanta lost 61.906787 rating points across Weeks 1–2 versus GB's net
+10.041805 loss. The CAR blowout is the largest new contributor, not offseason retention.
+
+Checks: 32 distinct Weeks 1–2 results, explicit FINAL versions captured/observed before the
+forecast, kickoff-ordered updates (saved order preserved for simultaneous games), all 32 teams
+present (no initial-rating fallback), and correct venue/home/away mappings. ESPN `LAR` is
+normalized to canonical `LA`. The replay matches **all 32 saved ratings exactly**, not just
+ATL/GB. No target-game result is included. T72 contains 31 finals, versus 32 in the official
+model: the later NYG–LA result changes neither ATL nor GB, explaining identical probabilities.
+The historical CSV and scoreboard were captured roughly five seconds before production
+generation; unchanged probabilities are not evidence of a stale rating snapshot.
+
+### Pregame information: used, unused, missing
+
+- **Used by production:** frozen rating/tie policy, 2016–2025 final results, eligible 2026
+  finalized results and home/neutral designation. No injury, QB, weather or market adjustment.
+- **Available but unused by production:** nflverse depth chart captured September 24
+  19:01:59.233152 CDT, provider update 07:42:08 CDT. Expected starters were Michael Penix Jr.
+  (ATL) and Jordan Love (GB); that archived depth feed was not official starter confirmation.
+  NFL injuries captured 19:01:58.744927 CDT listed Penix/Tua full participation; GB's
+  Aaron Banks, Warren Brinson,
+  Jayden Reed and Zach Bako-Bewele out, and Anthony Campbell/Javon Hargrave questionable;
+  ATL's Samson Ebukam out and Billy Bowman Jr. questionable. Injury provider publication time
+  is unknown; this is capture-time evidence. ESPN weather was 63°F/partly cloudy, with no
+  verified provider issue time. None of these facts demonstrates a particular probability shift.
+- **Missing from the archived model inputs:** verified official pregame inactives; original
+  issue times for injuries/weather; independent starter confirmation. At T72, a game-week
+  official injury report was also missing. Later sources are not substituted for those gaps.
+- **Valid pregame QB estimate:** the preserved shadow was **GB 74.77%, ATL 24.83%**, not an
+  Atlanta pick. Penix's shrunk EPA/attempt 0.071386 minus ATL reference 0.077082 gives
+  residual −0.005696; Love's 0.143066 minus GB reference 0.128974 gives +0.014093. Frozen
+  coefficient 5.989058 times home-minus-away residual 0.019789 gives **+0.118518 logit** for GB.
+  Its state was captured before publication, includes all 32 prior games and no target game;
+  the 2026 supplemental stats were last modified September 24 at 09:13:55 CDT. This is a
+  heavily shrunk QB-versus-team-reference estimate, not a counterfactual for replacing the QBs
+  responsible for recent team results. Historical QB training used retrospective starter IDs
+  (existing evidence-grade-C limitation); the live expected-QB evidence here was pregame.
+- **Context that supports a hypothesis, not a diagnosis:** the pregame ESPN passing leaders
+  for ATL were IDs `2972515` and `5344782`, mapped by the same archived depth chart to Cooper
+  Rush (22/39, 229 yards, 1 TD, 4 INT) and Jack Strand (8/15, 59 yards, 1 INT). Love's line was
+  37/71, 532 yards, 4 TD, 1 INT. Thus the expected ATL QB differed from these prior-season-to-date
+  passing contributors. This does not establish each game's starter or a causal QB-only loss.
+
+**Dated primary-source check (performed after the game):** The [Falcons' September 21
+4:29 p.m. ET announcement](https://www.atlantafalcons.com/news/michael-penix-jr-starting-qb-thursday-night-football-vs-packers)
+named Penix the Week 3 starter and said Cooper Rush had started both earlier games. Its
+[5:41 p.m. ET unofficial depth chart](https://www.atlantafalcons.com/news/atlanta-falcons-week-3-depth-chart-vs-green-bay-packers)
+corroborated the change. Both page dates precede the T72 forecast (8:09 p.m. ET September 21).
+These pages were not original runtime receipts, so their current content proves what the club
+dated as pregame information, not what the worker captured at T72. The preserved UPDATE QB
+shadow did use the listed Penix and still raised GB to 74.77%; a second long-run QB residual
+would duplicate that already-tested idea.
+
+Green Bay's [September 20, 6:05 p.m. site-dated recap](https://www.packers.com/news/game-recap-5-takeaways-from-packers-overtime-victory-over-jets-week-2-2026)
+reported Zach Bako-Bewele's knee injury before T72. The [September 23, 3 p.m. site-dated injury
+report](https://www.packers.com/news/packers-rule-out-four-list-two-questionable-vs-falcons-week-3-injury-report-2026)
+ruled out Bako-Bewele and guard Aaron Banks before the official UPDATE but after T72. The
+UPDATE injury capture recorded both as out; Elo ignored them. No preserved pregame line
+performance measure or validated line-to-win-probability effect establishes how much this
+should have moved the forecast. Atlanta had allowed 20 and 34 points in Weeks 1–2, and
+the [Falcons placed starting CB A.J. Terrell on injured reserve September 22 at 12:58 p.m.
+ET](https://www.atlantafalcons.com/news/falcons-place-aj-terrell-jr-on-injured-reserve).
+Those facts do not establish a strong-defense adjustment. The saved insights PBP capture
+predates Week 2; postgame defensive praise is excluded from this pregame audit.
+
+The [Falcons' September 24 inactives page](https://www.atlantafalcons.com/news/atlanta-falcons-week-3-inactives-green-bay-packers)
+and [Packers' September 24 inactives page](https://www.packers.com/news/packers-falcons-week-3-inactives-sept-24-2026)
+carry pregame publication labels. More decisively, the original runtime captured the
+[NFL single-game inactives article](https://www.nfl.com/news/week-3-thursday-night-inactives-atlanta-falcons-at-green-bay-packers)
+before the UPDATE but rejected its description format, as traced below. The saved
+normalized input remained `MISSING`; neither later web pages nor a parser repair can
+retroactively change the original forecast. No "due for a win" feature follows from
+Atlanta's 0–2 record.
+
+**Archived market comparison:** pregame ESPN event `401872948` in
+`R/raw/a007eb88113382c6cb3ef57b7c72ed61134521750d70b722792d57949d54988c.json`, authenticated by
+`R/captures/6315a91bc4ddf4ebbdfa4dee0fdb950ee6e0daa22172089e2e41d04f8715bec0.json`.
+The 2026 component was captured September 24 at **19:01:58.143949 CDT**, merged at
+19:01:58.312184; target status was still `pre`. Embedded DraftKings moneylines were GB **−238**,
+ATL **+195**, with spread GB −4.5. Raw implied probabilities are 70.4142%/33.8983%; dividing by
+their sum gives **67.5031% GB / 32.4969% ATL**, conditional two-way, not a three-outcome quote.
+Elo's comparable non-tie share is 72.7893%; calibration is 67.1854%. The JSON calls these fields
+`moneyline.*.close`, but they were already saved before kickoff: treat them only as that captured
+quote, **not independently verified closing odds**. Provider quote-publication time is absent;
+the source's `open` fields are not an independently timestamped opening observation. These
+incidental archived quotes were not used by any model. They do not support ATL 55–60%.
+
+### Does overconfidence recur?
+
+Reused, without fitting or searching:
+`~/nfl-predictor-live-data/probability/reports/4983130017770c3b1c0c77075586e328d49528158135773074805bbf3fa08aef.json`.
+These are saved **T60 regular-season, conditional non-tie home** reliability bins, not winner
+accuracy for all favorites. Ties are excluded from these bins. Adjacent bins were merged below
+30 observations, explaining the broad 2024 band. Intervals are saved 95% Wilson intervals for
+observed frequency, not confidence intervals for this individual game's true probability.
+
+| Production period / probability band | Home wins / games | Mean predicted | Observed | 95% Wilson |
+| --- | ---: | ---: | ---: | --- |
+| 2018–2023 / 70–80% | 197/268 | 74.61% | 73.51% | 67.92–78.43% |
+| 2024 / 70–100% (merged) | 60/76 | 79.02% | 78.95% | 68.50–86.60% |
+| 2025 / 70–80% | 30/48 | 74.43% | 62.50% | 48.36–74.78% |
+
+The 2025 gap suggests overconfidence but is imprecise; it is not consistent evidence of a
+universal 70–80% failure. The development 60–70% band also overpredicts (362 games, predicted
+64.91%, observed 57.73%, interval 52.59–62.72%). No saved subgroup analysis establishes that
+QB-return games specifically caused these gaps. Calibrated 60–70% bins were 31/48 in 2024
+(mean 65.02%, observed 64.58%, interval 50.44–76.57%) and 30/46 in 2025 (mean 65.10%, observed
+65.22%, interval 50.77–77.32%). These bins contain different games and are not paired evidence.
+On all 272 identical 2025 games, calibration's saved log-loss delta was −0.005491, with paired
+season/week-bootstrap interval **−0.019781 to +0.007184**. No convincing promotion evidence.
+All these previously examined seasons remain development evidence; no untouched holdout claim.
+
+### Disposition and one next experiment
+
+**Confirmed defect:** none in the probability path. A separate inactives parsing defect was
+found and repaired prospectively below. The known missing T60/FINAL records remain
+missing; unchanged. **Limitations:** results-only Elo applies the full blowout update regardless
+of who played QB, static home advantage, sparse calibration evidence, and QB shadow reference
+is not a recent-starter replacement adjustment. **Unknown:** true matchup probability, causal
+injury/QB contributions, and provider issue times where absent.
+
+Next experiment proposal only: a single, preregistered **expected-QB change versus the QB mix
+in recent completed games** residual, without changing Elo. Hypothesis: results-only Elo carries
+forward QB-specific poor results when the expected QB changes, while the existing long-run
+team reference misses that change. First require verifiable pre-cutoff expected-QB and prior
+participation evidence; do not substitute target actual starters. Freeze eligibility and one
+feature before fitting; estimate on earlier seasons only and evaluate the next season on matched
+T60 games against both unchanged Elo and the existing QB residual, reporting missing coverage.
+Primary criterion: lower paired log loss with a season/week-block 95% interval below zero;
+also report Brier, accuracy, sample sizes and all-eligible-game performance. Exclude this
+already-inspected ATL–GB game from selection, label historical results research, and require
+separate prospective confirmation before any versioned challenger/promotion. No grid, retention
+search, EPA search or live change is authorized by this recommendation.
+
+### Bounded next step: QB-change data feasibility — September 26
+
+The existing QB residual is the first comparator, not a new model to rebuild. On its
+identical 2025 T60 subset it covered 203/272 games: Elo log loss 0.671820, Brier 0.458856,
+winner accuracy 61.88% (202 decisive); QB residual 0.701457, 0.483894, 60.40%.
+The paired QB-minus-Elo log-loss difference was +0.029636 with saved 95% season/week
+bootstrap interval [+0.004604,+0.052566]. These previously inspected results argue
+against promoting that residual. They do not directly test a *change from recent QB
+participants*, which is the one distinct hypothesis supported by the Penix/Rush evidence.
+
+No valid offline comparison for that feature was run. The historical QB training file uses
+eventual target starters (`ops/season_qb.py`), while the inspected archives lack original
+T60 expected-starter identities with provider issue/update time, capture time, raw hash,
+and game-week availability evidence. A later web publication label or eventual starter
+cannot replace those receipts. The rebuilt player data contain prior-game QB IDs,
+attempts and passing EPA, but not a complete historical as-of join proving those rows
+and relevant final results were available at each target T60 cutoff. Both teams' injury
+and inactive status, cutoff and kickoff, team/venue identity, Elo reference and eventual
+outcome must be joined on the same game; missing fields must reduce coverage visibly.
+
+The smallest **prospective collection change** is a research-only immutable T60 evidence
+row per game, derived from sources the worker already fetches: each team's listed QB ID,
+alternates and status plus depth/injury/inactives capture and provider times/hashes; the
+last completed games' QB IDs, pass attempts and team pass-attempt totals, with final-observed
+times and stats capture/source hashes; the paired Elo revision, kickoff and explicit missing
+reasons. `ops/season_sources.py` already retains depth/injury captures, `ops/season_qb.py`
+retains raw per-game QB stats and receipt components, and `ops/season_shadow.py` retains
+prospective game-input snapshots. A derived cutoff join needs no new vendor or live model
+change. It must be saved at the actual cutoff, never reconstructed from later source
+states. Freeze one participation contrast and eligibility before collecting a test set;
+only then fit chronologically and compare on identical covered games against Elo and the
+existing QB residual, reporting all-game coverage, proper scores, accuracy and paired
+uncertainty. ATL–GB and previously inspected seasons remain development evidence.
+
+### Isolated inactives capture repair — September 27
+
+The immutable NFL inactives landing capture
+`R/raw/7df3ebd5cf142e055bce6a4ecfdd10715ce2ca2310ae9e88dee5e4d77225b6d8.html`
+linked the ATL–GB article at 19:01:58.862293 CDT. The worker fetched the article at
+19:01:59.461974 CDT; its saved raw SHA is
+`d71127cf7e480f3d2d3c7271c80e6118069370d565e18eeb005b745014c3162a`.
+The article's structured `datePublished` and `dateModified` were both 17:50:21.461 CDT,
+before the 19:15 kickoff. Its headline had the full `Atlanta Falcons at Green Bay Packers`
+matchup, but its description used `Falcons-Packers`. The original parser required
+the full matchup in **both** fields, raised `OFFICIAL_INACTIVES_TEAMS_MISMATCH`, and caused
+the saved input to read `NO_VERIFIED_PREGAME_OFFICIAL_INACTIVES_FOR_GAME`. Replacing only the
+description in memory allowed the unchanged remainder of the parser to produce both team
+sections. This is a source-normalization defect; Elo never used inactives, so it did not
+cause GB's 72.50% probability.
+
+The narrow fix still requires the full away-at-home headline and accepts an ordered
+`awayNickname-homeNickname` description. A reversed short pair remains rejected. The new
+regression failed on the old parser and passed after the fix; 21 focused tests passed with
+one unavailable optional real-capture fixture skipped. The full suite passed 1,314 tests
+with that same skip. A read-only replay of the exact saved article now returns 11 rows
+across ATL and GB with the original publication and capture times. Ruff on the changed
+Python files and `git diff --check` pass. Archived forecasts, receipts, model versions,
+scoring policy and the running comparison are unchanged; no expired record was republished.
+
+### Prospective QB-change evidence and preregistration — September 28
+
+The new research collector is enabled separately in `configs/season_live.toml`. At a real
+T60 run it appends a content-addressed record under private
+`R/shadow/qb-change-evidence/`; it runs after the ordinary forecast publications and
+does not change their probabilities, selection or scorecards. A frozen private
+`R/shadow/qb-change-policy.json` records the first collection time. The collector requires
+the existing ±10-minute T60 window, a future scheduled kickoff, the current season, and
+the existing receipt validator for each linked T60 forecast. Expired games are never
+replayed into this archive. Missing forecasts, source states and unavailable prior games
+stay explicit.
+
+Each record retains both teams' **listed rank-1 expected QB** GSIS IDs and alternatives
+from the exact depth capture, its capture time, provider update time, source hash and URL.
+Provider publication time is `null` when unavailable; an update timestamp is not relabeled
+as publication. `confirmed_starter_id` remains `null`. Injury and verified inactives
+snapshots include capture and provider times separately, relevant expected-QB rows,
+uncertainty and missing reasons. Official inactives article publication time is taken from
+its retained player rows when available. Prior current-season completed games retain game
+ID/date/kickoff, latest final-observed time and version, every QB with positive pass
+attempts, and total QB attempts, bound to the archived stats bytes, capture components and
+state artifact. A missing or retracted final cannot enter the participation history.
+The row links saved official, calibration and QB T60 revision IDs, model versions and
+definitions; unavailable links remain `MISSING`. The stats provider's HTTP Last-Modified
+is retained in the component receipts but is not claimed to be a publication time.
+
+**One preregistered comparison, recorded September 28 before collection:**
+Use future regular-season games captured after the private collection start for which
+the official Elo and existing QB shadow have valid T60 forecasts paired to the same
+immutable Elo revision. Both teams need verifiable expected QB IDs, available injury and
+inactive evidence without an expected-QB conflict, and three prior current-season games
+with final-observed times and complete QB attempt rows before the capture. A **QB change**
+means either expected QB differs from that team's highest-attempt passer across its three
+most recent completed games; all other eligible games form the unchanged group. The
+primary metric is the difference between groups in mean paired three-outcome log loss
+(`QB shadow − Elo`); a negative difference means QB information helped especially when
+the expected passer changed. Report the two within-group paired differences, Brier,
+winner accuracy, ties, a paired week-block uncertainty interval, and the full scheduled
+game denominator with delivered, missed, excluded and reason counts. Calibration is a
+separate descriptive reference. ATL–GB, all inspected historical seasons and Sunday's
+settled games are outside this prospective collection; no coefficient is fitted from
+them. Do not fit a new coefficient until at least 100 prospectively eligible changed-QB
+games across two seasons support chronological training and a later untouched test.
+Any later adjustment uses the expected QB's deviation from the recent team QB mixture,
+then fits only residual outcome information after the frozen Elo logit, so the team's
+recent results already reflected in Elo are not added again. Any such model needs a new
+review and version; this collector does not promote one.
+
+Read-only snapshot at 2026-09-28 11:24 CDT: worker `HEALTHY` (PID 5536), latest saved
+view 10:48 CDT, next scheduled run 12:48 CDT. The QB-change evidence archive has zero
+rows; the first future opportunity is PHI–CHI, kickoff 19:15 CDT with T60 window
+18:05–18:25 CDT. PHI and CHI each have only two prior current-season games, so that
+first collection row cannot enter the preregistered three-game comparison. A prior
+saved QB-state artifact resolves both teams' game IDs and pass attempts, but the
+latest view marks the current QB refresh `BLOCKED` after the free stats download timed
+out. The collector will retain that missing reason if it remains blocked at T60.
+Collection is configured and focused-tested, but a real T60 row has not yet been
+observed. Expected-QB provider publication timestamps and a complete
+historical as-of join remain unavailable. The live comparison policy and prior forecast
+archives stay frozen.
+
+The existing launchd worker was restarted once to load the flag; new PID 42137 reported
+`HEALTHY` at 11:33 CDT with the same 12:48 CDT next run, and no source cycle was forced.
+The focused source/QB/shadow/live/scoring suite passed 106 tests with one optional
+real-capture fixture skipped; changed-file Ruff and `git diff --check` passed. The
+optional scoped mypy attempt failed on the existing untyped `ops` import graph (599
+errors across 11 modules, including the new module); no typecheck pass is claimed.
+
+The same saved view has 14 Sunday September 27 games with final results. Official latest
+forecasts delivered 14/14 and selected 11 winners; its T72/T60/FINAL slots delivered
+13/14, 14/14 and 14/14. Calibration latest delivered 14/14 and selected 10 winners;
+its T72/T60/FINAL slots delivered 13/14, 14/14 and 14/14. QB latest delivered 14/14
+and selected 11 winners; its T72/T60/FINAL slots delivered 13/14, 13/14 and 13/14.
+All delivered Sunday forecasts are settled; the common T72 miss is LA–DEN, and the QB
+T60/FINAL miss is SEA–WAS. These outcomes did not enter a fit or policy change.
+
+### Reproduce the numeric audit (read-only)
+
+From the V2 root, run the following. It uses only original private artifacts and existing
+helpers; no fetch, training, forecast publication or archive write. It deliberately fails
+if the audited probability source/config changes. The saved source bundle verifies all
+original source bytes; the current inactives parser is intentionally exempted from the
+current-file comparison after the isolated repair above. Team aliases come from the frozen
+config, and `week1_live.py` is checked by its recorded code hash.
+
+```python
+import csv, json, sys, tomllib
+from datetime import datetime, UTC
+from pathlib import Path
+sys.path.insert(0, "ops")
+from week1_live import build_model, canonical, digest, kickoff
+from season_live import all_records
+from season_scoring import _latest_predictions
+from nfl_predictor.ratings.base import CompletedGame
+from nfl_predictor.ratings.elo import EloRater
+from nfl_predictor.models.tie import to_three_way
+
+r = Path("~/nfl-predictor-live-data/season").expanduser()
+def load(p):
+    v = json.loads(p.read_bytes())
+    assert digest(canonical(v)) == p.stem, p
+    return v
+records = all_records(r, "2026_03_ATL_GB")
+f = next(x for x in records if x["revision_id"] ==
+    "6f5cfab3fd0a2a90923d3bf4a0ce23e666299d5e3ba46d3e407228fcf6f8f3a0")
+cut, k = map(datetime.fromisoformat, (f["generated_at"], f["kickoff"]))
+slots = _latest_predictions({**f, "predictions": records}, k, k)
+assert slots["official"] == f and slots["T60"] is None and slots["FINAL"] is None
+m = load(r / "models" / (f["model_id"] + ".json"))
+s = next(load(p) for p in (r / "source-versions").glob("*.json")
+    if json.loads(p.read_text())["identity"]["source_sha256"] == f["source_sha256"])
+assert digest(canonical({n: digest(t.encode()) for n, t in s["files"].items()})) == f["source_sha256"]
+assert all(Path(n).read_text() == t for n, t in s["files"].items()
+    if n != "ops/season_sources.py")
+assert digest(Path("ops/week1_live.py").read_bytes()) == m["code_sha256"]
+cfg = tomllib.loads(s["files"]["configs/season_live.toml"])
+ALIASES = cfg["team_aliases"]
+cap = load(r / "captures/d8ed9e656ab38bd6d8cde537441c3e8e148b9c27195e57adc6f8dac0f9247bdc.json")
+p = r / "raw" / (cap["raw_sha256"] + ".csv")
+assert digest(p.read_bytes()) == cap["raw_sha256"] and datetime.fromisoformat(cap["captured_at"]) < cut
+rows = list(csv.DictReader(p.open()))
+elo, proof = build_model(rows, cfg)
+assert all(proof[x] == m[x] for x in ("history_sha256", "p_tie", "policy_sha256"))
+hist = [CompletedGame(x["game_id"], int(x["season"]),
+    cfg["team_aliases"].get(x["home_team"], x["home_team"]),
+    cfg["team_aliases"].get(x["away_team"], x["away_team"]),
+    int(x["home_score"]), int(x["away_score"]), x["location"] == "Neutral", kickoff(x))
+    for x in rows if cfg["history_start"] <= int(x["season"]) <= cfg["history_end"]]
+end = EloRater(**m["elo_policy"]).snapshot(hist, datetime(2026, 7, 1, tzinfo=UTC)).values
+print("2025_END/2026_START", [(t, end[t], elo.rating(t)) for t in ("ATL", "GB")])
+schedules = [load(p) for p in (r / "schedules").glob("*.json")]
+outcomes = [load(p) for p in (r / "outcomes").glob("*.json")]
+accepted = m["current_final_results"]
+assert len(accepted) == len({a["game_id"] for a in accepted}) == 32
+ordered, games = [], {}
+for a in accepted:
+    o = max((x for x in outcomes if x["game_id"] == a["game_id"]
+        and datetime.fromisoformat(x["observed_at"]) <= cut), key=lambda x: (x["observed_at"], x["version"]))
+    g = max((x for x in schedules if x["game_id"] == a["game_id"]
+        and datetime.fromisoformat(x["observed_at"]) <= cut), key=lambda x: x["observed_at"])
+    games[a["game_id"]] = g
+    ordered.append(g["kickoff"])
+    assert o["version"] == a["outcome_version"] and o["status"] == "FINAL"
+    assert (o["home_score"], o["away_score"]) == (a["home_score"], a["away_score"])
+    assert datetime.fromisoformat(o["source_capture_at"]) <= datetime.fromisoformat(o["observed_at"]) <= cut
+    assert datetime.fromisoformat(g["kickoff"]) < cut
+    assert g["home"] in elo.ratings and g["away"] in elo.ratings
+    before = (elo.rating(g["home"]), elo.rating(g["away"]))
+    elo.update(CompletedGame(a["game_id"], 2026, g["home"], g["away"],
+        o["home_score"], o["away_score"], g["neutral_site"], datetime.fromisoformat(o["observed_at"])))
+    if {"ATL", "GB"} & {g["home"], g["away"]}:
+        print(a["game_id"], before, "home_delta", elo.rating(g["home"]) - before[0],
+            "after", elo.rating(g["home"]), elo.rating(g["away"]), o["observed_at"])
+assert ordered == sorted(ordered) and elo.ratings == m["ratings"]
+assert digest(canonical({"ratings": elo.ratings, "p_tie": m["p_tie"],
+    "policy": m["policy_sha256"], "results": accepted})) == f["model_state_sha256"]
+assert (f["home"], f["away"], f["neutral_site"]) == ("GB", "ATL", False)
+probs = to_three_way(elo.home_probability("GB", "ATL", False), m["p_tie"])
+assert probs == tuple(f[x] for x in ("p_home", "p_away", "p_tie"))
+cap = load(r / "captures/6315a91bc4ddf4ebbdfa4dee0fdb950ee6e0daa22172089e2e41d04f8715bec0.json")
+p = r / "raw" / (cap["raw_sha256"] + ".json")
+assert digest(p.read_bytes()) == cap["raw_sha256"] and datetime.fromisoformat(cap["captured_at"]) < cut
+events = json.loads(p.read_bytes())["events"]
+for a in accepted:
+    g, matches = games[a["game_id"]], []
+    for e in events:
+        ts = {t["homeAway"]: t for t in e["competitions"][0]["competitors"]}
+        teams = tuple(ALIASES.get(ts[h]["team"]["abbreviation"], ts[h]["team"]["abbreviation"])
+            for h in ("home", "away"))
+        if teams == (g["home"], g["away"]) and datetime.fromisoformat(e["date"]) == datetime.fromisoformat(g["kickoff"]):
+            matches.append((e, ts))
+    assert len(matches) == 1, a["game_id"]
+    e, ts = matches[0]
+    assert e["status"]["type"]["completed"]
+    assert (int(ts["home"]["score"]), int(ts["away"]["score"])) == (a["home_score"], a["away_score"])
+target = next(e for e in events if e["id"] == "401872948")
+assert target["status"]["type"]["state"] == "pre"
+odds = target["competitions"][0]["odds"][0]["moneyline"]
+h, a = int(odds["home"]["close"]["odds"]), int(odds["away"]["close"]["odds"])
+ih, ia = -h / (100-h), 100 / (a+100)
+print("PREGAME_QUOTE", h, a, "NO_VIG", ih/(ih+ia), ia/(ih+ia))
+print("PASS: all 32 saved ratings, result mappings, chronology and exact probabilities", probs)
+```
+
 Run `uv run python ops/season_live.py --once` to capture current free sources, reconcile
 the schedule, preserve final outcomes/corrections, generate only eligible pregame revisions,
 and rebuild scorecards. Run without `--once` for the season daemon. It has no Week 1 stop.

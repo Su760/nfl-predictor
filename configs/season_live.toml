@@ -53,9 +53,11 @@ qb_state_supplements = [
   { season = 2025, url = "https://github.com/nflverse/nflverse-data/releases/download/stats_player/stats_player_week_2025.parquet" },
   { season = 2026, url = "https://github.com/nflverse/nflverse-data/releases/download/stats_player/stats_player_week_2026.parquet" },
 ]
+qb_stats_fetch_attempts = 2
 
 # Prospectively archived challenger evidence; no automatic production promotion.
 shadow_enabled = true
+qb_change_evidence_enabled = true
 
 [live_model_comparison]
 schema_version = "live-model-comparison-v1"

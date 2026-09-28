@@ -195,6 +195,23 @@ def test_official_inactive_article_structure_parses_both_teams() -> None:
     assert published == "2026-09-10T23:26:21Z"
 
 
+def test_official_inactive_article_accepts_ordered_short_matchup_description() -> None:
+    body = _inactive_article(
+        description='The official inactives for 49ers-Rams on "Thursday Night Football."'
+    )
+    rows, _ = season_sources._inactive_article(
+        body, _inactive_game(), "https://www.nfl.com/news/test"
+    )
+    assert {row["team"] for row in rows} == {"SF", "LA"}
+    assert len(rows) == 2
+
+
+def test_official_inactive_article_rejects_reversed_short_matchup_description() -> None:
+    body = _inactive_article(description="The official inactives for Rams-49ers")
+    with pytest.raises(ValueError, match="TEAMS_MISMATCH"):
+        season_sources._inactive_article(body, _inactive_game(), "https://www.nfl.com/news/test")
+
+
 @pytest.mark.parametrize(
     ("changes", "error"),
     [
