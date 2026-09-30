@@ -45,12 +45,12 @@ normally push the milestone. Do not rebuild or implement the next milestone.
 - [x] Re-run focused calculation/parser/viewer and browser checks before publication.
 - [x] Define the next bounded build and preserve unrelated formatting outside the index.
 
-Next bounded build (planned, not implemented): **weekly usage trends, TE support,
+Completed milestone 2: **weekly usage trends, TE support,
 and a local watchlist**, using the existing usage module and exact player IDs.
 Extend the coverage audit to TEs before enabling their metrics. Persist watchlist
 membership locally by GSIS ID; no league sync, recommendations or projections.
 
-Comparison contract for that build:
+Comparison contract (implemented weekly; optional three-game changes deferred):
 
 - Weekly change compares selected NFL week W with W−1, two disjoint periods. Label
   exact weeks/game dates and each player's observed/expected games; a bye has no
@@ -67,7 +67,7 @@ Comparison contract for that build:
 - Validate disjoint game sets, byes, missed games, shortened history, null denominators,
   TE coverage and watchlist persistence. Season aggregates remain descriptive context.
 
-Then (planned): **opportunity quality and scoring-specific expected points**. Audit
+Next bounded build (planned): **opportunity quality and scoring-specific expected points**. Audit
 field position, air yards and other verified opportunity inputs; define scoring
 settings explicitly. Keep retrospective expected points distinct from forecasts,
 expose sample/coverage and evaluate the expected-points method before relying on it.
@@ -76,7 +76,44 @@ Later (planned): **ESPN roster context, waivers/trades, evaluated weekly and
 rest-of-season projections**. Verify league access and scoring/roster rules with a
 manual-import fallback. Require chronological evaluation, baselines, forecast cutoffs,
 uncertainty and prospective evidence before presenting projection-based decisions.
-No part of this roadmap is implemented by the closeout.
+The historical milestone 1 closeout only planned this roadmap; milestone 2 below now implements weekly trends, TE support and the watchlist. Later work remains deferred.
+
+### Player Lab milestone 2 execution — September 30, 2026
+
+The new request authorizes the previously planned build and selective normal commit/push.
+Scope: `fantasy/{sources,usage,server}.py`, new `fantasy/trends.py`,
+`ops/viewer/fantasy.{html,js,css}`, `tests/test_fantasy_{sources,usage,server}.py`,
+new `tests/test_fantasy_trends.py`, `tests/fantasy_ui.cjs`, this fantasy roadmap,
+and `docs/runbooks/fantasy-player-lab.md`. Keep all 23 existing formatting diffs,
+NFL runtime/config/models/archives and original data receipts unchanged. Only the
+fantasy preview may restart; fantasy source refresh stays manual and isolated.
+
+- [x] Audit TE coverage in saved provider bytes: 235 stats rows / 103 IDs across
+      Weeks 1–3; no null targets/carries/air yards; all 235 have exact snap matches.
+- [x] Add TE normalization and weekly pure calculations with W versus W−1 deltas
+      in percentage points, dates, numerator/denominator counts and per-metric samples.
+- [x] Extend filters/comparisons and add weekly trend tables plus a localStorage
+      watchlist keyed by GSIS ID, with honest storage failure and unavailable states.
+- [x] Verify missing games/byes/short history/zero denominators, TE source coverage,
+      browser reload persistence and desktop/mobile interactions; update the runbook.
+- [x] Prepare selective milestone commit/push; require remote SHA verification in the
+      session closeout. No merge/deploy. Keep all 23 unrelated formatting diffs unstaged.
+
+Design: preserve the navy/teal table workspace. A dedicated weekly section shows exact
+calendar weeks, all three opportunity shares, counts, coverage and signed pp changes.
+Weekly trends are independent of the existing overlapping summary windows. Optional
+three-game period deltas are deferred; no overlapping-period change is calculated.
+A week without a captured scheduled game is labeled "bye or schedule gap" because
+absence alone cannot prove a bye. Scheduled unfinished/missing observations and team changes block deltas.
+Watchlist IDs persist only in this browser/origin, not a server/account; missing catalog
+members remain removable by ID. Corrupt or blocked storage must be visible, not silently
+claimed as saved. No routes, predictions, league sync or recommendations are added.
+
+Validation: 53 focused Python checks, Ruff, JS syntax and desktop/mobile browser checks
+passed. TE source audit: 235 stats rows matched to snaps, plus 93 TE-labeled snap-only
+rows with unavailable usage. Latest-position TE filter: 120 players (one cross-position
+source-label discrepancy). Current 2026 Weeks 1–3 snapshot: 433 players / 1,129 rows.
+See the fantasy runbook for retrieval times, real pp examples and remaining coverage gaps.
 
 Authority: current user request explicitly authorizes implementation, free source access,
 local automation, and coherent verified commits/pushes to codex/nfl-predictor-v2.

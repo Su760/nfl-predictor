@@ -61,6 +61,27 @@ def test_normalization_keeps_missing_optional_sources_null():
     assert row["red_zone"] is None
 
 
+def test_te_ingestion_and_schedule_preservation():
+    d = data()
+    d["players"][0]["position"] = "TE"
+    result = source().normalize(d, 2026, "2026-09-30")
+    assert result["rows"][0]["position"] == "TE"
+    assert result["schedule"][0]["game_id"] == "g"
+    assert result["coverage"]["positions"]["TE"]["player_game_rows"] == 1
+
+
+def test_te_snap_only_ingestion_keeps_targets_unavailable():
+    d = data()
+    d["players"] = []
+    d["ids"] = [dict(gsis_id="p", pfr_id="X")]
+    d["snaps"] = [dict(season=2026, game_type="REG", game_id="g", team="CHI",
+                       player="Tight End", position="TE", pfr_player_id="X",
+                       offense_snaps=50, offense_pct=1)]
+    r = source().normalize(d, 2026, "2026-09-30")["rows"][0]
+    assert r["position"] == "TE" and r["snaps"] == 50
+    assert r["targets"] is None
+
+
 def test_non_player_provider_rows_do_not_block_identified_wr_rb():
     d = data()
     d["players"].append({**d["players"][0], "player_id": None, "position": None})

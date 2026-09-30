@@ -1,13 +1,113 @@
-# Player Lab milestone 1
+# Player Lab runbook — milestones 1 and 2
 
 Local preview: <http://127.0.0.1:8520/fantasy>, branch `codex/fantasy-player-lab`.
-Historical WR/RB usage only: targets, carries, receiving air yards, target/carry/snap
+Historical WR/RB/TE usage only: targets, carries, receiving air yards, target/carry/snap
 shares and verified red-zone opportunities. Three viewing windows, searchable and
 sortable leaderboards, two-player comparisons, metric definitions, sample counts,
 source coverage and timestamps. ESPN sync, projections/rankings, trades, chat and
 sports betting remain deferred. The September 30 closeout authorizes a selective
 milestone commit and normal push to `origin/codex/fantasy-player-lab`. No merge or
 deployment is authorized; the worktree and its unrelated edits are preserved.
+
+## Current milestone 2 — weekly usage and local watchlist
+
+TEs now participate in all summary windows, position filters and two-player comparisons.
+Weekly trends show every NFL week through the latest represented completed week,
+with exact dates/opponents, observed/expected games and metric-specific coverage.
+Each target/carry/snap share uses summed player counts / summed matching team counts;
+both counts are visible. A change is **week W minus week W−1 in percentage points**.
+These calendar-week periods share no games and are independent of the summary window.
+The optional disjoint three-game change remains deferred.
+
+Week 1 has no baseline. Byes, missing observations, unfinished scheduled games,
+missing paired counts, zero denominators and unresolved team changes withhold the
+affected delta. A gap never borrows an older appearance. A week without a captured game
+is labeled “No scheduled game (bye or schedule gap)”: schedule absence alone does not establish
+the reason. A published zero with a positive denominator is still a valid zero share.
+For legacy snapshots without a schedule, trends stay unavailable until manual refresh.
+
+Watch/Unwatch controls and the saved list persist only in localStorage for this browser
+and exact origin (`http://127.0.0.1:8520`). Stored membership is versioned GSIS player IDs,
+not names, at `nfl-player-lab.watchlist.v1`. Reloads retain it; other tabs at the same
+origin update when storage changes. There is no server write, account or device sync.
+Changing host/port or clearing browser data changes/removes this local list. Missing
+catalog members remain removable by ID. Invalid storage is preserved until explicit
+Clear; blocked/full storage shows failure and does not claim the attempted change saved.
+Simultaneous edits in separate tabs use the browser's last completed write; no transactional
+multi-tab editing guarantee is claimed.
+
+### Current data audit
+
+Manual source retrieval: **2026-09-30 23:25:12.366–23:25:13.202 UTC**
+(18:25:12–13 CDT); snapshot built **23:25:13.354 UTC**. Five raw source hashes
+match the prior milestone's capture. The schedule file changed only in unused market
+columns on 16 future-game rows; IDs, dates, weeks, teams and results are unchanged.
+All six current files match their saved receipt hashes. HTTP provider modification timestamps
+remain those listed in the historical table below; they are not exact publication
+times. Retrieval time is not evidence that a newer game or provider revision exists.
+
+Loaded **2026 regular season, Weeks 1–3, 48 completed games**, latest **PHI at CHI,
+September 28, final 7–27**, now represented by 23 WR/RB/TE observations. The captured
+schedule contains 272 regular-season games. There are **433 distinct players and
+1,129 player-game observations**. All counts describe source coverage, not full rosters.
+
+| Source-row position | Distinct IDs | Observations | Missing targets/carries/air yards/red-zone, each | Missing snaps/team snaps, each |
+| ------------------- | -----------: | -----------: | -----------------------------------------------: | -----------------------------: |
+| WR                  |          197 |          504 |                                               47 |                              3 |
+| RB                  |          116 |          297 |                                               23 |                              0 |
+| TE                  |          121 |          328 |                                               93 |                              0 |
+
+TE audit before enabling support: **235 box-score rows, 103 GSIS IDs**, all with
+targets/carries/air yards and all 235 matched to snaps by the exact ID bridge.
+The normalized TE rows add **93 snap-only observations** with unknown box-score usage;
+red-zone opportunities also stay unavailable. All 328 TE-labeled observations have
+verified offensive snap denominators. The current TE filter contains **120 players**:
+Jackson Meeks has TE snap-only labels in Weeks 1–2 and a WR stats label in Week 3.
+The catalog consistently uses latest observed position, so he is listed once as WR.
+Per-position source coverage is not additive for distinct IDs and is labeled in the UI.
+
+| Latest-position catalog | Last-game complete usage / players | Last-three or season complete usage / players | Last-three or season complete snap share / players |
+| ----------------------- | ---------------------------------: | --------------------------------------------: | -------------------------------------------------: |
+| WR                      |                          154 / 197 |                                     119 / 197 |                                          142 / 197 |
+| RB                      |                           90 / 116 |                                      66 / 116 |                                           77 / 116 |
+| TE                      |                           82 / 120 |                                      51 / 120 |                                           96 / 120 |
+
+“Usage” here covers targets, carries, air yards, verified red-zone opportunities and
+target/carry shares, whose complete-player counts coincide in this snapshot. Across
+all positions, 163 observed rows lack box-score usage; three rows lack snaps (the same
+Cody White ID-bridge gap). Entirely absent observations are additional coverage gaps.
+The original 70 WR/RB snap-only rows retain their unavailable usage.
+
+Real examples, independently checked against raw player/team files:
+
+- Trey McBride: target share **10/26 = 38.5%** in Week 2, **11/50 = 22.0%** in
+  Week 3, **−16.5 pp**; snap share **44/50 = 88.0%** to **79/87 = 90.8%**, **+2.8 pp**.
+- Brock Bowers: Week 3 targets **13/30 = 43.3%**, but no Week 2 player observation;
+  the Week 3 change remains unavailable. Missing Weeks 1–2 are not asserted to be injuries.
+
+### Milestone 2 verification and roadmap
+
+**53 focused Python tests passed**, including TE ingestion, legacy snapshots, summed
+multi-game denominators, disjoint weeks, byes, missed/unfinished games, early history,
+nulls, legitimate zeros, zero denominators, duplicates, transfers and API window
+independence. Ruff and JavaScript syntax checks passed. Browser checks passed at
+1440px and 390px with no page overflow or JS errors: TE filters/comparisons, exact weekly
+coverage and pp values, missing-week rendering, watchlist reload/cross-tab/mobile add/remove,
+unavailable IDs, corrupt/blocked/full storage, and the existing source-failure cases.
+Screenshots: `/tmp/fantasy-trends-{desktop,mobile}.png`.
+
+The initial browser run failed while UI wiring was incomplete; the subsequent cross-tab
+test stopped with `Error: Please use browser.newContext()`. The harness now creates an
+explicit shared context; the complete final suite passed. The orphaned fantasy preview
+was restarted on its own port after the tool daemon interruption. The NFL worker/viewer,
+configuration, models and forecast archives were not restarted or modified.
+
+Next bounded build: **audit opportunity-quality inputs and implement evaluated,
+scoring-specific retrospective expected points**, with explicit scoring settings,
+chronological evaluation, sample coverage and a clear separation from projections.
+ESPN context, waivers/trades and evaluated weekly/rest-of-season projections remain later.
+Routes and dated roster histories remain unavailable. No recommendations, projections,
+ESPN sync, betting, merging or deployment are part of this milestone.
 
 ## Isolated operation
 
@@ -70,7 +170,7 @@ labeled stale. Snapshot freshness measures local capture age, not provider laten
   latest observed team. Players absent from both stats and matched snap records are
   outside the catalog. No transfer is present in the audited WR/RB box-score sample.
 
-## Verified 2026 source coverage
+## Historical milestone 1 source audit
 
 Snapshot built **2026-09-30 18:39:22 UTC (13:39:22 CDT)**. Actual retrieval/capture
 times span **18:39:20.125–18:39:22.566 UTC (13:39:20–22 CDT)** that day. These are
@@ -134,14 +234,14 @@ Source URLs and receipts are also visible in the app.
 ## Validation
 
 ```sh
-.venv-fantasy/bin/python -m pytest tests/test_fantasy_usage.py tests/test_fantasy_sources.py tests/test_fantasy_server.py tests/test_week1_viewer.py -q -o cache_dir=.fantasy-cache/pytest
-.venv-fantasy/bin/ruff check --no-cache fantasy tests/test_fantasy_usage.py tests/test_fantasy_sources.py tests/test_fantasy_server.py ops/week1_viewer.py
+.venv-fantasy/bin/python -m pytest tests/test_fantasy_trends.py tests/test_fantasy_usage.py tests/test_fantasy_sources.py tests/test_fantasy_server.py tests/test_week1_viewer.py -q -o cache_dir=.fantasy-cache/pytest
+.venv-fantasy/bin/ruff check --no-cache fantasy tests/test_fantasy*.py
 node --check ops/viewer/fantasy.js
 NODE_PATH=/Users/supashramesha/.agents/skills/gstack/node_modules node tests/fantasy_ui.cjs
 git diff --check
 ```
 
-37 focused Python tests passed, including the existing viewer checks. Browser checks
+Milestone 1 validation: 37 focused Python tests passed, including the existing viewer checks. Browser checks
 passed at 1440px and 390px: WR/RB filters, ordering/search, all windows, two-player
 selection and clearing, duplicate-player prevention, null/stale/failed/empty source
 responses, HTML escaping, failed-window recovery, no page overflow and zero JS errors.
@@ -161,7 +261,7 @@ rerun with approved access. PyArrow emitted nonfatal sandbox CPU-info warnings d
 read-only audits. No full forecasting suite, worker cycle, model fitting or production
 restart was run; focused checks are the validation boundary for this milestone.
 
-## September 30 closeout
+## Historical milestone 1 September 30 closeout
 
 Revalidated the healthy preview, all six saved source hashes, actual retrieval times,
 latest represented game and the complete missing-data sets. The 37 focused Python

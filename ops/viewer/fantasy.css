@@ -464,3 +464,111 @@ footer {
     letter-spacing: -0.8px;
   }
 }
+
+.watchlist,
+.trends {
+  margin: 24px 0;
+  padding: 20px;
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.watchlist-filter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  font-weight: 400;
+}
+.watchlist-filter input {
+  width: 18px;
+  min-height: 18px;
+  margin: 0;
+}
+.watchlist-members {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 0;
+  list-style: none;
+}
+.watchlist-members li {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 12px;
+}
+.watchlist-members button {
+  font-size: 12px;
+  min-height: 34px;
+  padding: 5px 8px;
+}
+#watchlist-status {
+  font-size: 13px;
+  color: var(--muted);
+}
+#watchlist-status.storage-error {
+  color: var(--warn);
+}
+.player-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  max-width: 210px;
+}
+.player-actions button {
+  font-size: 12px;
+  min-height: 34px;
+  padding: 5px 8px;
+  margin-top: 7px;
+}
+#trend-player {
+  max-width: 440px;
+  margin-bottom: 8px;
+}
+.trend-table th:first-child,
+.trend-table td:first-child {
+  white-space: normal;
+  min-width: 200px;
+  max-width: 270px;
+}
+.trend-table .cell-note {
+  font-size: 12px;
+}
+.trend-change {
+  display: block;
+  font-weight: 650;
+  margin-top: 6px;
+}
+.trend-reason {
+  display: block;
+  white-space: normal;
+  font-size: 11px;
+  color: var(--muted);
+  max-width: 240px;
+  margin-left: auto;
+}
+@media (max-width: 600px) {
+  .watchlist,
+  .trends {
+    padding: 14px;
+  }
+  .trend-table th:first-child,
+  .trend-table td:first-child {
+    min-width: 140px;
+    max-width: 170px;
+  }
+  .trend-table td {
+    min-width: 165px;
+  }
+  .watchlist-members li {
+    width: 100%;
+  }
+  .watchlist-members button,
+  .player-actions button {
+    min-height: 44px;
+  }
+}

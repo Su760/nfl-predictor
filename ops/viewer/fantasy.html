@@ -21,8 +21,8 @@
           <p class="season" id="season">Fantasy football</p>
           <h1>Follow the opportunity.</h1>
           <p>
-            Who is getting the work? Compare observed WR and RB usage, game by
-            game.
+            Who is getting the work? Compare observed WR, RB and TE usage, game
+            by game.
           </p>
         </div>
         <div class="freshness">
@@ -37,7 +37,8 @@
           ><select id="position">
             <option value="WR">Wide receivers</option>
             <option value="RB">Running backs</option>
-            <option value="all">WR + RB</option>
+            <option value="TE">Tight ends</option>
+            <option value="all">WR + RB + TE</option>
           </select>
         </div>
         <div>
@@ -81,6 +82,23 @@
           following UTC date and scored schedule data is available.
         </p>
       </details>
+      <section class="watchlist" aria-labelledby="watchlist-title">
+        <div class="section-heading">
+          <h2 id="watchlist-title">Your watchlist</h2>
+          <button id="watchlist-clear" type="button">Clear watchlist</button>
+        </div>
+        <p class="caption">
+          Browser-local storage only. Saved by player ID for this browser and
+          site address; no account or device sync. Clearing browser data removes
+          it.
+        </p>
+        <p id="watchlist-status" role="status" aria-live="polite"></p>
+        <ul id="watchlist-members" class="watchlist-members"></ul>
+        <label class="watchlist-filter"
+          ><input id="watchlist-only" type="checkbox" /> Show only watchlisted
+          players in the leaderboard</label
+        >
+      </section>
       <section aria-labelledby="leaderboard-title">
         <div class="section-heading">
           <h2 id="leaderboard-title">Usage leaderboard</h2>
@@ -103,6 +121,24 @@
         </div>
         <p id="empty" hidden></p>
       </section>
+      <section class="trends" aria-labelledby="trends-title">
+        <div class="section-heading">
+          <h2 id="trends-title">Weekly usage trends</h2>
+        </div>
+        <label for="trend-player">Player</label
+        ><select id="trend-player">
+          <option value="">Choose a player</option>
+        </select>
+        <p class="caption">
+          Each change compares NFL week W with W−1, with no shared games. Counts
+          are player / team opportunities. Changes are percentage points (pp),
+          not relative percentages. These weeks are independent of the viewing
+          window above.
+        </p>
+        <div id="trends" aria-live="polite">
+          <p>Choose a player to see weekly target, carry and snap shares.</p>
+        </div>
+      </section>
       <section class="comparison" aria-labelledby="compare-title">
         <div class="section-heading">
           <h2 id="compare-title">Two-player comparison</h2>
@@ -123,7 +159,9 @@
           </div>
         </div>
         <div id="comparison" aria-live="polite">
-          <p>Choose any two WRs or RBs. Both use the viewing window above.</p>
+          <p>
+            Choose any two WRs, RBs or TEs. Both use the viewing window above.
+          </p>
         </div>
       </section>
       <section class="notes" aria-labelledby="coverage-title">

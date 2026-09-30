@@ -5,6 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 from fantasy.config import ROOT, configuration
+from fantasy.trends import weekly_trends
 from fantasy.usage import METRICS, WINDOW_NOTE, summarize
 
 
@@ -20,9 +21,10 @@ def payload(cfg, window):
         age = (datetime.now(UTC) - datetime.fromisoformat(data["updated_at"])).total_seconds()
         state = "stale" if age < 0 or age > cfg["stale_after_hours"] * 3600 else "available"
         common.update({k: data[k] for k in ("updated_at", "coverage", "sources")})
-        common.update(players=players, state=state, age_hours=round(age / 3600, 1))
+        common.update(players=players, state=state, age_hours=round(age / 3600, 1),
+                      trends=weekly_trends(data["rows"], data["games"], data.get("schedule", [])))
     except (OSError, ValueError, KeyError, TypeError) as error:
-        common.update(players=[], state="unavailable", sources={}, coverage={},
+        common.update(players=[], trends={}, state="unavailable", sources={}, coverage={},
                       updated_at=None, error=f"Usage snapshot unavailable: {error}")
     try:
         common["refresh"] = json.loads((cfg["cache"] / "refresh.json").read_text())

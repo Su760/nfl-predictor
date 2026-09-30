@@ -28,6 +28,14 @@ def test_shares_are_ratios_of_sums_and_byes_do_not_consume_games():
     assert p["metrics"]["carries"]["value"] == 0
 
 
+def test_tight_ends_are_eligible_for_all_summary_windows():
+    rows, games = fixture()
+    for r in rows:
+        r["position"] = "TE"
+    for window in ["last", "last3", "season"]:
+        assert usage().summarize(rows, games, window)[0]["position"] == "TE"
+
+
 def test_snap_share_uses_summed_counts_not_rounded_weekly_percentages():
     rows, games = fixture()
     rows[-1].update(snaps=10, team_snaps=20)

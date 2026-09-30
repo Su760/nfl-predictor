@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from fantasy.config import configuration
-from fantasy.usage import number
+from fantasy.usage import POSITIONS, number
 
 REQUIRED = {
     "players": {"season", "season_type", "game_id", "player_id", "team", "position",
@@ -102,7 +102,7 @@ def normalize(data, season, today):
              and number(r.get("away_score")) is not None]
     games_by_id = {g["game_id"]: g for g in games}
     players = [r for r in regular("players") if r["game_id"] in games_by_id
-               and r.get("position") in {"WR", "RB"}]
+               and r.get("position") in POSITIONS]
     unique_index(players, ("player_id", "game_id"))
     team_index = unique_index(regular("teams"), ("game_id", "team"))
     pfr_to_gsis, gsis_to_pfr = defaultdict(set), defaultdict(set)
@@ -122,7 +122,7 @@ def normalize(data, season, today):
     known = {(r["player_id"], r["game_id"]) for r in players}
     for s in snaps:
         ids = pfr_to_gsis[s["pfr_player_id"]]
-        if len(ids) != 1 or s["game_id"] not in games_by_id or s.get("position") not in {"WR", "RB"}:
+        if len(ids) != 1 or s["game_id"] not in games_by_id or s.get("position") not in POSITIONS:
             continue
         pid = next(iter(ids))
         if len(gsis_to_pfr[pid]) == 1 and (pid, s["game_id"]) not in known:
@@ -131,7 +131,7 @@ def normalize(data, season, today):
             known.add((pid, s["game_id"]))
     rows = []
     for p in players:
-        if p["position"] not in {"WR", "RB"}:
+        if p["position"] not in POSITIONS:
             continue
         gid, pid, team = p["game_id"], p["player_id"], p["team"]
         if team not in games_by_id[gid]["teams"]:
@@ -148,8 +148,21 @@ def normalize(data, season, today):
                      "snaps": number(snap.get("offense_snaps")),
                      "team_snaps": totals.get((gid, team)) if snap else None,
                      "red_zone": red_zone(pbp_groups[gid], pid, team, targets, carries)})
+    position_coverage = {}
+    for position in sorted(POSITIONS):
+        subset = [r for r in rows if r["position"] == position]
+        position_coverage[position] = {
+            "players": len({r["player_id"] for r in subset}),
+            "player_game_rows": len(subset),
+            "null_counts": {k: sum(r[k] is None for r in subset) for k in
+                            ("targets", "carries", "air_yards", "snaps", "team_snaps", "red_zone")},
+        }
     return {"season": season, "games": games, "rows": rows,
+            "schedule": [{"game_id": r["game_id"], "week": int(r["week"]),
+                          "date": r["gameday"], "teams": [r["away_team"], r["home_team"]]}
+                         for r in schedule],
             "coverage": {"completed_games": len(games), "scheduled_games": len(schedule),
+                         "positions": position_coverage,
                          "observed_players": len({r["player_id"] for r in rows}),
                          "player_game_rows": len(rows),
                          "weeks": sorted({g["week"] for g in games}),

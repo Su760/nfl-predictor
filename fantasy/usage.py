@@ -2,6 +2,8 @@
 from collections import defaultdict
 from math import isfinite
 
+POSITIONS = {"WR", "RB", "TE"}
+
 METRICS = {
     "targets": ("Targets", "Credited receiving targets, including incomplete passes."),
     "target_share": ("Target share", "Sum of player targets / sum of all team targets in the same games. Not pass attempts; not an average of weekly percentages."),
@@ -63,7 +65,7 @@ def summarize(rows, games, window):
         if key in seen:
             raise ValueError("duplicate player game")
         seen.add(key)
-        if row["position"] in {"WR", "RB"} and row["game_id"] in games_by_id:
+        if row["position"] in POSITIONS and row["game_id"] in games_by_id:
             by_player[row["player_id"]].append(row)
     result = []
     for player_id, observed in by_player.items():

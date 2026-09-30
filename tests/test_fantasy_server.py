@@ -61,3 +61,22 @@ def test_config_is_worktree_local_and_loopback(monkeypatch, tmp_path):
     monkeypatch.setenv("FANTASY_CONFIG", str(path))
     with pytest.raises(ValueError, match="worktree"):
         config.configuration()
+
+
+def test_weekly_te_trends_do_not_change_with_summary_window(tmp_path):
+    cfg = {"cache": tmp_path, "season": 2026, "stale_after_hours": 24,
+           "forecast_url": "http://127.0.0.1:8510/"}
+    games = [dict(game_id=f"g{w}", week=w, date=f"2026-09-{w:02}", teams=["CHI", "GB"])
+             for w in [1, 2]]
+    rows = [dict(player_id="00-0000001", name="TE", position="TE", team="CHI",
+                 game_id=f"g{w}", targets=w, team_targets=10) for w in [1, 2]]
+    (tmp_path / "snapshot.json").write_text(json.dumps({"season": 2026, "rows": rows,
+        "games": games, "schedule": games, "coverage": {}, "sources": {},
+        "updated_at": datetime.now(UTC).isoformat()}))
+    last = json.loads(server().response("/api/fantasy?window=last", cfg)[0])
+    season = json.loads(server().response("/api/fantasy?window=season", cfg)[0])
+    assert last["trends"] == season["trends"]
+    assert last["players"][0]["metrics"]["targets"]["value"] == 2
+    assert season["players"][0]["metrics"]["targets"]["value"] == 3
+    metric = last["trends"]["00-0000001"]["periods"][1]["metrics"]["target_share"]
+    assert metric["delta_pp"] == 10

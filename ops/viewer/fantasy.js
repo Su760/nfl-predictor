@@ -42,6 +42,135 @@ function cell(k, metric) {
   return `<strong class="${available(m.value) ? "" : "unavailable"}">${value(k, m.value)}</strong><span class="cell-note">${m.covered_games} / ${m.expected_games} games</span>`;
 }
 
+const watchlistKey = "nfl-player-lab.watchlist.v1";
+let watched = new Set(),
+  watchlistError = "";
+
+function readWatchlist() {
+  watchlistError = "";
+  let raw;
+  try {
+    raw = localStorage.getItem(watchlistKey);
+  } catch {
+    watchlistError =
+      "Browser storage is unavailable. Watchlist changes cannot be saved.";
+    return false;
+  }
+  try {
+    const saved =
+      raw === null ? { version: 1, player_ids: [] } : JSON.parse(raw);
+    if (
+      saved?.version !== 1 ||
+      !Array.isArray(saved.player_ids) ||
+      !saved.player_ids.every(
+        (id) => typeof id === "string" && /^00-\d{7}$/.test(id),
+      )
+    )
+      throw new Error("Invalid watchlist");
+    watched = new Set(saved.player_ids);
+    return true;
+  } catch {
+    watchlistError =
+      "Saved watchlist could not be read and was not overwritten. Clear watchlist to reset it.";
+    return false;
+  }
+}
+
+function refreshWatchlist() {
+  renderWatchlist();
+  if (snapshot) renderBoard();
+}
+
+function toggleWatch(id) {
+  if (!readWatchlist()) {
+    refreshWatchlist();
+    return;
+  }
+  const next = new Set(watched);
+  if (next.has(id)) next.delete(id);
+  else next.add(id);
+  try {
+    localStorage.setItem(
+      watchlistKey,
+      JSON.stringify({ version: 1, player_ids: [...next] }),
+    );
+    watched = next;
+  } catch {
+    watchlistError =
+      "Browser storage is unavailable or full. This change was not saved.";
+  }
+  refreshWatchlist();
+}
+
+function bindWatchButtons(container) {
+  container.querySelectorAll("[data-watch]").forEach((button) => {
+    button.onclick = () => toggleWatch(button.dataset.watch);
+  });
+}
+
+function renderWatchlist() {
+  $("watchlist-status").textContent =
+    watchlistError || `${watched.size} saved in this browser only.`;
+  $("watchlist-status").className = watchlistError
+    ? "notice storage-error"
+    : "caption";
+  $("watchlist-members").innerHTML = [...watched]
+    .map((id) => {
+      const player = snapshot?.players.find((p) => p.player_id === id);
+      const label = player
+        ? `${player.name} · ${player.team} ${player.position}`
+        : `Unavailable player ${id}`;
+      return `<li><span>${esc(label)}</span><button data-watch="${esc(id)}" aria-label="Remove ${esc(label)} from watchlist">Remove</button></li>`;
+    })
+    .join("");
+  bindWatchButtons($("watchlist-members"));
+}
+
+function trendOptions() {
+  const selected = $("trend-player").value;
+  $("trend-player").innerHTML =
+    '<option value="">Choose a player</option>' +
+    snapshot.players
+      .map(
+        (p) =>
+          `<option value="${esc(p.player_id)}">${esc(p.name)} · ${esc(p.team)} ${esc(p.position)}</option>`,
+      )
+      .join("");
+  if (snapshot.players.some((p) => p.player_id === selected))
+    $("trend-player").value = selected;
+}
+
+function renderTrends() {
+  if (!snapshot) return;
+  const id = $("trend-player").value,
+    player = snapshot.players.find((p) => p.player_id === id);
+  const trend = snapshot.trends?.[id];
+  if (!player || !trend?.periods.length) {
+    $("trends").textContent = player
+      ? "Weekly usage unavailable for this player."
+      : "Choose a player to see weekly usage and disjoint week-to-week changes.";
+    return;
+  }
+  const keys = ["target_share", "carry_share", "snap_share"];
+  $("trends").innerHTML =
+    `<h3>${esc(player.name)} · ${esc(trend.team)}</h3><div class="table-wrap" tabindex="0" role="region" aria-label="Scrollable weekly usage"><table class="trend-table"><thead><tr><th scope="col">Week / game sample</th>${keys.map((k) => `<th scope="col">${esc(snapshot.definitions[k].label)}</th>`).join("")}</tr></thead><tbody>${trend.periods
+      .map(
+        (period) =>
+          `<tr><th scope="row">Week ${period.week}<span class="player-meta">${period.prior_week ? `vs Week ${period.prior_week}` : "No prior season week"}<br>${period.games.map((g) => `${esc(g.date)} · ${esc(g.teams.join(" at "))}`).join("<br>") || "No game in captured schedule"}<br>${period.observed_games}/${period.expected_games} observed games<br>${esc(period.status)}</span></th>${keys
+            .map((k) => {
+              const m = period.metrics[k];
+              const delta = available(m.delta_pp)
+                ? `${m.delta_pp > 0 ? "+" : ""}${m.delta_pp.toFixed(1)} pp`
+                : "Change unavailable";
+              return `<td>${cell(k, m)}<span class="cell-note">${value("count", m.opportunities)} / ${value("count", m.team_opportunities)} ${k === "snap_share" ? "offensive snaps" : k === "target_share" ? "targets" : "carries"} (player / team)</span><span class="trend-change">${delta}</span>${available(m.delta_pp) ? "" : `<span class="trend-reason">${esc(m.delta_reason)}</span>`}</td>`;
+            })
+            .join("")}</tr>`,
+      )
+      .join(
+        "",
+      )}</tbody></table></div><p class="caption">Each change is this NFL week minus the immediately preceding NFL week, in percentage points. Games never overlap. Missing games, byes and incomplete paired counts make the affected change unavailable; older appearances never replace them. Counts are summed within each period, not averaged shares. Offensive snaps are not routes.</p>`;
+}
+
 function options() {
   const html =
     '<option value="">Choose a player</option>' +
@@ -66,7 +195,8 @@ function renderBoard() {
   const rows = snapshot.players.filter(
     (p) =>
       (position === "all" || p.position === position) &&
-      `${p.name} ${p.team}`.toLowerCase().includes(query),
+      `${p.name} ${p.team}`.toLowerCase().includes(query) &&
+      (!$("watchlist-only").checked || watched.has(p.player_id)),
   );
   rows.sort((a, b) => {
     const x = a.metrics[metric].value,
@@ -84,13 +214,27 @@ function renderBoard() {
   $("leaderboard").querySelector("tbody").innerHTML = rows
     .map(
       (p) =>
-        `<tr><td><span class="player-name">${esc(p.name)}</span><span class="player-meta">${esc(p.team)} · ${esc(p.position)} · ${p.observed_games}/${p.expected_games} observed</span><button class="choose" data-player="${esc(p.player_id)}" aria-pressed="${chosen.includes(p.player_id)}" aria-label="${chosen.includes(p.player_id) ? "Remove" : "Compare"} ${esc(p.name)}">${chosen.includes(p.player_id) ? "Selected" : "Compare"}</button></td>${metricKeys.map((k) => `<td>${cell(k, p.metrics[k])}</td>`).join("")}</tr>`,
+        `<tr><td><span class="player-name">${esc(p.name)}</span><span class="player-meta">${esc(p.team)} · ${esc(p.position)} · ${p.observed_games}/${p.expected_games} observed</span><div class="player-actions"><button class="choose" data-player="${esc(p.player_id)}" aria-pressed="${chosen.includes(p.player_id)}" aria-label="${chosen.includes(p.player_id) ? "Remove" : "Compare"} ${esc(p.name)}">${chosen.includes(p.player_id) ? "Selected" : "Compare"}</button><button data-trend="${esc(p.player_id)}" aria-label="Weekly trends for ${esc(p.name)}">Trends</button><button data-watch="${esc(p.player_id)}" aria-pressed="${watched.has(p.player_id)}" aria-label="${watched.has(p.player_id) ? "Unwatch" : "Watch"} ${esc(p.name)}">${watched.has(p.player_id) ? "Unwatch" : "Watch"}</button></div></td>${metricKeys.map((k) => `<td>${cell(k, p.metrics[k])}</td>`).join("")}</tr>`,
     )
     .join("");
   $("empty").hidden = rows.length > 0;
   $("empty").textContent = snapshot.players.length
     ? "No players match these filters. Try another name, team, or position."
     : "No verified current-season players are available. Source status and refresh instructions appear below.";
+  if ($("watchlist-only").checked && !rows.length)
+    $("empty").textContent =
+      "No watchlisted players match these filters. Your saved list remains above.";
+  bindWatchButtons($("leaderboard"));
+  $("leaderboard")
+    .querySelectorAll("[data-trend]")
+    .forEach(
+      (button) =>
+        (button.onclick = () => {
+          $("trend-player").value = button.dataset.trend;
+          renderTrends();
+          $("trends-title").scrollIntoView({ block: "start" });
+        }),
+    );
   $("leaderboard")
     .querySelectorAll("[data-player]")
     .forEach(
@@ -117,7 +261,7 @@ function renderComparison() {
   );
   if (players.some((p) => !p)) {
     $("comparison").innerHTML =
-      `<p>${players.filter(Boolean).length ? "One player selected. Choose a second player to compare." : "Choose any two WRs or RBs. Both use the viewing window above."}</p>`;
+      `<p>${players.filter(Boolean).length ? "One player selected. Choose a second player to compare." : "Choose any two WRs, RBs or TEs. Both use the viewing window above."}</p>`;
     return;
   }
   const header = `<tr><th scope="col">Metric</th>${players.map((p) => `<th scope="col">${esc(p.name)}<span class="player-meta">${esc(p.team)} ${esc(p.position)} · Weeks ${p.weeks.join(", ")}<br>${p.observed_games}/${p.expected_games} observed games</span></th>`).join("")}</tr>`;
@@ -161,7 +305,24 @@ function renderEvidence() {
     : "";
   const c = snapshot.coverage;
   $("coverage").innerHTML =
-    `<p class="coverage-line">${c.completed_games ?? 0} completed games · Weeks ${(c.weeks || []).join(", ") || "unavailable"} · ${c.observed_players ?? 0} observed WR/RB players · ${c.player_game_rows ?? 0} player-game rows.</p><p class="coverage-line">Counts describe the captured sample, not a full roster. A missing row cannot distinguish injury, inactivity, or missing provider coverage. Byes contribute neither numerator nor denominator.</p><p class="coverage-line"><strong>Routes unavailable.</strong> No route shares or targets-per-route are inferred from snaps.</p>`;
+    `<p class="coverage-line">${c.completed_games ?? 0} completed games · Weeks ${(c.weeks || []).join(", ") || "unavailable"} · ${c.observed_players ?? 0} observed WR/RB/TE players · ${c.player_game_rows ?? 0} player-game rows.</p><p class="coverage-line">Counts describe the captured sample, not a full roster. A missing row cannot distinguish injury, inactivity, or missing provider coverage. Byes contribute neither numerator nor denominator.</p><p class="coverage-line"><strong>Routes unavailable.</strong> No route shares or targets-per-route are inferred from snaps.</p>`;
+  if (c.positions) {
+    $("coverage").innerHTML +=
+      `<p class="coverage-line">Position coverage uses source row labels; leaderboard filters use each player's latest observed position. A player with changing source labels can appear in multiple coverage groups.</p><ul class="position-coverage">${Object.entries(
+        c.positions,
+      )
+        .map(
+          ([position, coverage]) =>
+            `<li><strong>${esc(position)}</strong>: ${coverage.players} IDs across ${coverage.player_game_rows} observations. Missing counts: ${Object.entries(
+              coverage.null_counts,
+            )
+              .map(
+                ([key, count]) => `${esc(key.replaceAll("_", " "))} ${count}`,
+              )
+              .join("; ")}.</li>`,
+        )
+        .join("")}</ul>`;
+  }
   const currentSources = Object.keys(snapshot.sources).length
     ? snapshot.sources
     : snapshot.refresh.sources || {};
@@ -191,6 +352,7 @@ async function load() {
   snapshot = null;
   $("leaderboard").querySelector("tbody").innerHTML = "";
   $("comparison").textContent = "Loading this window…";
+  $("trends").textContent = "Loading weekly usage…";
   $("count").textContent = "";
   $("empty").hidden = true;
   $("reload").disabled = true;
@@ -205,6 +367,9 @@ async function load() {
     snapshot = result;
     renderEvidence();
     options();
+    trendOptions();
+    renderWatchlist();
+    renderTrends();
     renderBoard();
     renderComparison();
   } catch (error) {
@@ -215,6 +380,7 @@ async function load() {
     $("comparison").textContent =
       "Comparison unavailable until this window loads.";
     $("count").textContent = "";
+    $("trends").textContent = "Weekly usage unavailable until data loads.";
   } finally {
     if (version === requestVersion) $("reload").disabled = false;
   }
@@ -252,4 +418,27 @@ $("clear").onclick = () => {
     renderComparison();
   }
 };
+$("trend-player").onchange = renderTrends;
+$("watchlist-only").onchange = () => {
+  if (snapshot) renderBoard();
+};
+$("watchlist-clear").onclick = () => {
+  try {
+    localStorage.removeItem(watchlistKey);
+    watched = new Set();
+    watchlistError = "";
+  } catch {
+    watchlistError =
+      "Browser storage is unavailable. The watchlist could not be cleared.";
+  }
+  refreshWatchlist();
+};
+window.addEventListener("storage", (event) => {
+  if (event.key === watchlistKey || event.key === null) {
+    readWatchlist();
+    refreshWatchlist();
+  }
+});
+readWatchlist();
+renderWatchlist();
 load();
