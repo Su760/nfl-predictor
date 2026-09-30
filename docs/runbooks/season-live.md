@@ -998,3 +998,108 @@ without changing that forecast.
 The LaunchAgent remains wrapped by `caffeinate -i`, and macOS reports an active
 `PreventUserIdleSystemSleep` assertion. This supports unattended collection only while the Mac is
 awake, logged in and online. It does not support closed-lid sleep, shutdown or offline operation.
+
+## Week 3 closeout and QB source limitation — September 29, 2026
+
+Bounded recovery from existing immutable reports, with no evaluation rerun:
+`R/weekly-reports/a04c924f28693a8f2080876ac35803fddc0b9edde7e5a0a4d07fd30bf61713a4.json`
+and `R/analysis/shadow-reports/9297ee5021d9327a4732e15b4a031850e5e8eca2d9a5030c1abb952bf79c4f11.json`.
+Here `R` is the private season data root. Both report content hashes match filenames.
+PHI–CHI is FINAL, PHI 7–CHI 27; the saved outcome was first observed
+`2026-09-29T04:17:24.159644Z` and agrees with the NFL game center checked September 29.
+
+| Selection / identical-game sample | Correct/total | Accuracy | Natural-log loss | Three-outcome Brier |
+| --- | ---: | ---: | ---: | ---: |
+| Official production, latest valid pregame | 12/16 | 75.00% | .632924 | .438892 |
+| T60 production, calibration's 15 games | 12/15 | 80.00% | .588083 | .397682 |
+| T60 calibration, same 15 games | 10/15 | 66.67% | .622981 | .427824 |
+| T60 production, QB's 13 games | 11/13 | 84.62% | .520387 | .337420 |
+| T60 QB, same 13 games | 11/13 | 84.62% | .459791 | .287113 |
+
+Official production coverage is 16/16, zero missing. T60 production/calibration each
+cover 15/16 and miss ATL–GB. QB covers 13/16 and misses ATL–GB, SEA–WAS and PHI–CHI.
+Production delivered SEA–WAS and PHI–CHI; they are excluded only from the paired QB
+sample. There are no ties. Brier is the sum of three squared errors, range 0–2.
+These are small prospective samples; no tuning, model promotion or policy change.
+
+### Archived expected-QB conflict and source semantics
+
+The first original collector record is
+`R/shadow/qb-change-evidence/d4078180aa01948d58ef95d1f8256bb06a78c9a9fc8e8d29114d02955e8388c9.json`
+(`2026-09-28T23:15:55.671411Z`); the second is
+`2dd0d57b5797996bc0bf4e90907ef3cdf7389aed8710643ede6f012defe6c6ff.json`
+(`23:21:28.727783Z`). Both remain unchanged and represent one game, not two samples.
+
+- Depth raw `bd5542ae46887d38c06c06c9a0483787c6a1a0326a0c375be6e9ec3542ab169c.parquet`,
+  from `https://github.com/nflverse/nflverse-data/releases/download/depth_charts/depth_charts_2026.parquet`:
+  `dt=2026-09-28T15:17:44Z`, captured `23:15:33.364506Z`. Rank 1 is Caleb Williams,
+  GSIS `00-0039918`, ESPN `4431611`; rank 2 Tyson Bagent, `00-0038416` / `4434153`;
+  rank 3 Case Keenum, `00-0028986` / `15168`.
+- NFL injuries raw `ecaee16de21b909812e710480bb94fefffcc1723fe43d498c6524c12d435ed30.html`,
+  source `https://www.nfl.com/injuries/`, captured `23:15:32.647789Z`, with no verified
+  publication time: Williams OUT (hamstring); Bagent questionable (concussion).
+- NFL inactives raw `4cfb2f17483668f9e1967534010e308a8d23a36b1734d87196b77688130d0ddd.html`,
+  source `https://www.nfl.com/news/week-3-monday-night-inactives-philadelphia-eagles-at-chicago-bears`,
+  published `22:47:49.097000Z`, modified `22:48:47.412000Z`, captured `23:15:33.603290Z`:
+  Williams inactive. The retained NewsArticle body lists inactives and names no replacement starter.
+
+All times above are September 28 UTC. The raw hashes were checked against the original
+collector links. `ops/season_sources.py:579` selects the latest `dt`, QB, rank 1 and
+copies the provider IDs; there is no demonstrated identity or parsing defect.
+The [provider dictionary](https://nflreadr.nflverse.com/articles/dictionary_depth_charts.html)
+defines `dt` as record-load time and `pos_rank` as rank within a depth-chart position slot.
+The existing `source_updated_at` field holds that load timestamp; it must not be interpreted
+as a starter announcement or its publication time. This snapshot passes the existing
+36-hour age check. The conflict is an inadequate game-starter signal, not a failed fetch
+or an age-gate violation.
+
+`ops/season_qb.py:682` rejects the OUT expected player; the inactive guard at line 700
+remains an independent protection. Replaying the original inputs and archived pregame QB
+state `fb5e1e033120ba9b67951222348d09a695c3681d4183847cfe3924c8d74c808a`
+returns `FALLBACK / EXPECTED_QB_INJURY_STATUS_OUT`, preserving baseline probabilities.
+Bagent/Keenum estimates remain explicitly hypothetical, unweighted and excluded from
+forecast scorecards. Injury clearance or omission from inactives cannot confirm who starts.
+The collector already records `expected_starter_source=depth_chart_rank_1` and
+`confirmed_starter_id=null` (`ops/season_qb_evidence.py:291`).
+
+No existing captured, supported source establishes the replacement. A future selection
+path needs a reliable game/team/player-specific pregame confirmation with an archived URL,
+content hash, capture time, publication time when available, and unambiguous player-ID join.
+It must reject stale/conflicting assertions and still enforce OUT/inactive guards. No new
+scraper, arbitrary backup promotion or postgame reconstruction is supported here. Explicit
+confirmation ingestion remains unimplemented. No research input policy changed; its frozen
+identity and existing live comparison are preserved. Any future selection-policy change
+requires its own prospective version before collection.
+
+### Focused verification and deployment status
+
+Added twelve focused test cases across `tests/test_season_sources.py`,
+`tests/test_season_qb.py` and `tests/test_season_qb_evidence.py`: archived IDs/ranks,
+ambiguous rank 1, fresh/stale depth, valid but unconfirmed inference, future captures,
+missing injury evidence, OUT/inactive rejection, retained source provenance, and absence
+of automatic replacement/confirmation. Four existing guard/scenario tests were included.
+The valid-availability example is explicitly a synthetic unit fixture, never a revision
+of the real PHI–CHI evidence. No explicit-confirmed-starter acceptance test is claimed,
+because there is no supported confirmation ingestion path.
+
+Focused command: `PYTHONDONTWRITEBYTECODE=1 .venv/bin/pytest -q -p no:cacheprovider tests/test_season_sources.py tests/test_season_qb.py tests/test_season_qb_evidence.py -k 'phi_chi or depth_inference_and_inactive_omission or stale_depth_capture_keeps or uncertain_starter_scenarios_have_no_weights or real_shape_injury_out or expected_qb_listed_inactive or missing_injury_evidence_fails_closed'`.
+Result: **16 passed, 52 deliberately deselected**, zero failed/skipped (1.20 seconds).
+Changed-test Ruff and `git diff --check` passed. No full suite or completed evaluation rerun.
+A before/after SHA-256 check of 1,283 PHI–CHI forecast/receipt/proof, collector, report,
+frozen-policy and relevant source/config files found zero changes.
+
+At `2026-09-29T21:46:50.940463Z`, worker PID 3006 is healthy; its normal source run is
+scheduled for `22:40:55.877177Z`. The existing LaunchAgent's executable and working
+directory point to this V2 worktree; `season_live.run_once` uses `fetch_sources`,
+then `run_shadow`, then `archive_t60`. No runtime source/config changed and no worker
+restart, deployment, commit or push occurred. These tests establish the existing guard
+behavior; they do not establish a deployed replacement-starter fix.
+
+Next collection checkpoint: **PIT at CLE, October 1, T60 18:05–18:25 CDT**
+(target 18:15 CDT; kickoff 19:15 CDT / October 2 00:15Z). Read-only execution of the
+existing collector history helpers finds three final-observed games for each team,
+complete QB attempts and no missing-history reasons: CLE totals 22/30/31; PIT 40/40/34.
+The normal worker will use the unchanged guarded depth-inference path. At that window,
+inspect the newly appended collector record: expect three prior games/team, original
+source timestamps/IDs, `confirmed_starter_id=null` absent a supported confirmation path,
+and valid paired T60 forecast references or explicit missing/availability-conflict reasons.

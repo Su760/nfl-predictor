@@ -524,3 +524,102 @@ def test_current_weekly_supplement_restores_state_without_refitting(tmp_path, mo
         assert len(updated["state_source_components"]) == 2
         assert updated["coefficient"] == a["coefficient"]
         assert updated.get("lineage") == a.get("lineage")
+
+
+
+def _phi_chi_pregame_case():
+    """Archived identities/availability with synthetic history sufficient for every QB."""
+    import copy
+
+    g = game()
+    g.update(home="CHI", away="PHI", kickoff="2026-09-29T00:15:00Z")
+    g["inputs"]["expected_qb"].update(
+        captured_at="2026-09-28T23:15:33.364506Z",
+        source_updated_at="2026-09-28T15:17:44Z",
+        source_url="https://github.com/nflverse/nflverse-data/releases/download/"
+                   "depth_charts/depth_charts_2026.parquet",
+        data={
+            "CHI": {"gsis_id": "00-0039918", "espn_id": "4431611",
+                    "player_name": "Caleb Williams", "alternatives": [
+                        {"gsis_id": "00-0038416", "espn_id": "4434153",
+                         "player_name": "Tyson Bagent", "depth_rank": 2},
+                        {"gsis_id": "00-0028986", "espn_id": "15168",
+                         "player_name": "Case Keenum", "depth_rank": 3},
+                    ]},
+            "PHI": {"gsis_id": "00-0036389", "espn_id": "4040715",
+                    "player_name": "Jalen Hurts"},
+        },
+    )
+    g["inputs"]["injuries"] = {
+        "status": "AVAILABLE", "source_url": "https://www.nfl.com/injuries/",
+        "captured_at": "2026-09-28T23:15:32.647789Z",
+        "data": [
+            {"team": "CHI", "player": "Caleb Williams", "position": "QB",
+             "game_status": "Out", "injury": "Hamstring"},
+            {"team": "CHI", "player": "Tyson Bagent", "position": "QB",
+             "game_status": "Questionable", "injury": "Concussion"},
+        ],
+    }
+    g["inputs"]["inactives"] = {
+        "status": "AVAILABLE", "captured_at": "2026-09-28T23:15:33.603290Z",
+        "source_url": "https://www.nfl.com/news/"
+                      "week-3-monday-night-inactives-philadelphia-eagles-at-chicago-bears",
+        "data": [{"team": "CHI", "player": "Caleb Williams", "position": "QB",
+                  "published_at": "2026-09-28T22:47:49.097000Z"}],
+    }
+    a = artifact()
+    estimate = a["player_values"]["h"]
+    a["player_values"] = {
+        player: copy.deepcopy(estimate)
+        for player in ["00-0039918", "00-0038416", "00-0028986", "00-0036389"]
+    }
+    a["team_references"] = {"CHI": 0.0, "PHI": 0.0}
+    return g, a, datetime(2026, 9, 28, 23, 15, 55, tzinfo=UTC)
+
+
+@pytest.mark.parametrize("evidence, reason", [
+    ("both", "EXPECTED_QB_INJURY_STATUS_OUT"),
+    ("out_only", "EXPECTED_QB_INJURY_STATUS_OUT"),
+    ("inactive_only", "EXPECTED_QB_LISTED_INACTIVE"),
+    ("stale_depth", "EXPECTED_QB_UNAVAILABLE"),
+    ("missing_injuries", "QB_INJURY_EVIDENCE_UNAVAILABLE"),
+    ("future_capture", "EXPECTED_QB_CAPTURE_TIME_INVALID"),
+])
+def test_phi_chi_unresolved_evidence_never_scores_an_automatic_replacement(evidence, reason):
+    import copy
+
+    g, a, at = _phi_chi_pregame_case()
+    if evidence == "out_only":
+        g["inputs"]["inactives"]["data"] = []
+    elif evidence in {"inactive_only", "missing_injuries"}:
+        g["inputs"]["injuries"]["data"] = []
+    if evidence == "stale_depth":
+        g["inputs"]["expected_qb"]["status"] = "STALE"
+    elif evidence == "missing_injuries":
+        g["inputs"]["injuries"]["status"] = "MISSING"
+    elif evidence == "future_capture":
+        g["inputs"]["expected_qb"]["captured_at"] = "2026-09-28T23:16:00Z"
+    before = copy.deepcopy(g)
+    result = season_qb.predict_qb(BASE, g, a, lambda: at)
+    assert result["status"] == "FALLBACK"
+    assert result["limitations"] == [reason]
+    assert {k: result[k] for k in BASE} == BASE
+    assert g == before
+    assert g["inputs"]["expected_qb"]["data"]["CHI"]["gsis_id"] == "00-0039918"
+    for scenario in result.get("conditional_scenarios", []):
+        assert "weight" not in scenario
+        assert "Caleb Williams" not in scenario["assumption"]
+        assert "excluded from forecast scorecards" in scenario["limitations"][0]
+
+
+def test_phi_chi_valid_depth_inference_remains_unconfirmed_with_all_availability_clear():
+    # Counterfactual unit fixture only; never reinterpret the original OUT/inactive capture.
+    g, a, at = _phi_chi_pregame_case()
+    g["inputs"]["injuries"]["data"] = []
+    g["inputs"]["inactives"]["data"] = []
+    result = season_qb.predict_qb(BASE, g, a, lambda: at)
+    assert result["status"] == "AVAILABLE"
+    assert result["p_tie"] == BASE["p_tie"]
+    expected = result["evidence"]["expected_qb"]
+    assert expected == g["inputs"]["expected_qb"]
+    assert expected["data"]["CHI"].get("confirmed_starter_id") is None

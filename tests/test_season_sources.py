@@ -355,3 +355,65 @@ def test_combined_capture_freshness_uses_oldest_component():
     receipt = {"captured_at": "2026-09-16T05:00:00Z", "oldest_component_captured_at": "2026-09-16T02:00:00Z", "source_last_modified": None, "raw_sha256": "a" * 64}
     with pytest.raises(ValueError, match="STALE"):
         season_sources._required_check(receipt, {"maximum_capture_age_seconds": 7200}, datetime(2026, 9, 16, 5, tzinfo=UTC))
+
+
+
+def _phi_chi_depth_bytes():
+    """Minimal rows transcribed from pregame raw bd5542ae; no postgame starter."""
+    rows = [
+        {"dt": "2026-09-28T15:17:44Z", "team": "CHI", "pos_abb": "QB",
+         "pos_rank": rank, "player_name": name, "espn_id": espn, "gsis_id": gsis}
+        for rank, name, espn, gsis in [
+            (1, "Caleb Williams", "4431611", "00-0039918"),
+            (2, "Tyson Bagent", "4434153", "00-0038416"),
+            (3, "Case Keenum", "15168", "00-0028986"),
+        ]
+    ]
+    buffer = io.BytesIO()
+    season_sources.pl.DataFrame(rows).write_parquet(buffer)
+    return buffer.getvalue()
+
+
+@pytest.mark.parametrize("maximum_age, expected_status", [(129600, "AVAILABLE"), (7200, "STALE")])
+def test_phi_chi_depth_rank_preserves_ids_and_capture_without_confirming_starter(
+    maximum_age, expected_status,
+):
+    body = _phi_chi_depth_bytes()
+    receipt = {
+        "source_url": "https://github.com/nflverse/nflverse-data/releases/download/"
+                      "depth_charts/depth_charts_2026.parquet",
+        "captured_at": "2026-09-28T23:15:33.364506Z",
+        "source_last_modified": None,
+        "raw_sha256": season_sources.sha256(body).hexdigest(),
+    }
+    data, check = season_sources._depth(
+        body, receipt, {"maximum_depth_age_seconds": maximum_age},
+        datetime(2026, 9, 28, 23, 15, 55, tzinfo=UTC),
+    )
+    saved = season_sources._input(check, data)
+    assert saved["status"] == expected_status
+    assert saved["source_url"] == receipt["source_url"]
+    assert saved["captured_at"] == receipt["captured_at"]
+    assert saved["raw_sha256"] == receipt["raw_sha256"]
+    # Provider dt means record load time; it does not identify a starter announcement.
+    assert saved["source_updated_at"] == "2026-09-28T15:17:44Z"
+    assert data["CHI"]["gsis_id"] == "00-0039918"
+    assert data["CHI"]["espn_id"] == "4431611"
+    assert [p["gsis_id"] for p in data["CHI"]["alternatives"]] == [
+        "00-0038416", "00-0028986",
+    ]
+    assert data["CHI"].get("confirmed_starter_id") is None
+
+
+def test_phi_chi_conflicting_rank_one_rows_are_rejected_instead_of_choosing_backup():
+    frame = season_sources.pl.read_parquet(io.BytesIO(_phi_chi_depth_bytes()))
+    frame = frame.with_columns(season_sources.pl.lit(1).alias("pos_rank"))
+    buffer = io.BytesIO()
+    frame.write_parquet(buffer)
+    receipt = {"captured_at": "2026-09-28T23:15:33Z", "source_last_modified": None,
+               "raw_sha256": season_sources.sha256(buffer.getvalue()).hexdigest()}
+    with pytest.raises(ValueError, match="DEPTH_STARTING_QB_AMBIGUOUS"):
+        season_sources._depth(
+            buffer.getvalue(), receipt, {"maximum_depth_age_seconds": 129600},
+            datetime(2026, 9, 28, 23, 15, 55, tzinfo=UTC),
+        )

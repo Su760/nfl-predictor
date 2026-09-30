@@ -656,3 +656,40 @@ The three-prior-game comparison rule and source/capture cutoffs remain unchanged
 Focused source/QB/shadow/collector/live/scoring tests: 107 passed, one optional
 real-capture fixture skipped; changed-file Ruff and `git diff --check` passed.
 Commit only after the staged diff and newly tracked file list are inspected.
+
+
+## Week 3 closeout / expected-QB source gap — September 29, 2026
+
+Bounded plan: preserve the existing ledger edit, live comparison policy, worker,
+source/config/model code, historical forecasts, receipts and both collector captures.
+The original pregame depth bytes list Williams at rank 1 and Bagent/Keenum at
+ranks 2/3; NFL injuries and inactives rule Williams out. The current normalizer
+faithfully copies rank 1 and the QB guard correctly refuses a scored forecast.
+Provider dt is record-load time, not an explicit starter announcement. No captured,
+supported source establishes the replacement. No guessed starter, new scraper,
+model change or research input-policy revision is justified.
+
+Authorized file scope for this plan: this ledger, tests/test_season_sources.py,
+tests/test_season_qb.py, tests/test_season_qb_evidence.py and
+ docs/runbooks/season-live.md (documentation only).
+
+- [x] Recover completed official and matched T60 Week 3 metrics from hash-verified reports.
+- [x] Trace original player IDs, raw depth/injury/inactive sources and timestamps through
+      rank-1 normalization and the OUT/inactive guards; identify the confirmation gap.
+- [x] Add focused regression cases for the actual PHI–CHI conflict, valid depth inference,
+      stale/ambiguous evidence, unavailable players and absence of starter confirmation.
+- [x] Verify the archived conflict through the unchanged predictor, run only focused
+      tests/lint/diff checks and confirm historical evidence preservation.
+- [x] Verify the next normal-worker collection opportunity and document that no replacement
+      resolver or live code fix is deployed; record the specific source requirement.
+
+Verification: 12 added cases plus four existing guards/scenarios passed in one focused
+run (16 passed, 52 deliberately deselected, zero failures/skips); changed-test Ruff and
+diff checks passed. Original pregame replay gives FALLBACK /
+EXPECTED_QB_INJURY_STATUS_OUT. SHA-256 preservation check: 1,283 files, zero changes.
+Only tests and documentation changed; no runtime fix, source selector, input-policy
+revision, restart, deployment, tuning, promotion, commit or push. Explicit confirmation
+remains blocked by the documented source gap. Live worker PID3006 healthy21:46:50Z,
+LaunchAgent points to this V2 worktree. Next collection: PIT–CLE Oct1 T6018:05–18:25CDT;
+both have three finalized games and complete QB attempt rows. Full evidence, saved
+Week3 table, supported-source requirement and exact checkpoint are in season-live.md.

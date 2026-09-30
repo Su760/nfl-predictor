@@ -166,3 +166,45 @@ def test_retracted_prior_final_is_missing_and_article_publication_is_distinct(tm
     ]
     assert record["inactives_source"]["source_published_at"] == stamp(at - timedelta(minutes=10))
     assert record["inactives_source"]["captured_at"] == stamp(at - timedelta(minutes=1))
+
+
+
+def test_depth_inference_and_inactive_omission_do_not_confirm_a_starter(tmp_path):
+    at, view, cfg, artifact_id = _setup(tmp_path)
+    game = view["games"][-1]
+    game["inputs"]["injuries"]["data"] = []
+    game["inputs"]["inactives"].update(status="AVAILABLE", reason=None, data=[])
+    before = json.dumps(game, sort_keys=True)
+    result = archive_t60(view, tmp_path, cfg, at, {"qb-test": {"artifact_id": artifact_id}})
+    path = tmp_path / "shadow/qb-change-evidence" / f"{result['saved'][0]}.json"
+    record = json.loads(path.read_text())
+    assert json.dumps(game, sort_keys=True) == before
+    assert digest(canonical(record)) == path.stem
+    for team, player_id in [("ATL", "qb-a"), ("PIT", "qb-p")]:
+        selection = record["teams"][team]
+        assert selection["expected_qb_id"] == player_id
+        assert selection["expected_starter_source"] == "depth_chart_rank_1"
+        assert selection["confirmed_starter_id"] is None
+        assert selection["uncertainty"] == []
+    evidence = record["expected_qb_source"]
+    for key in ["source_url", "captured_at", "source_updated_at", "raw_sha256", "data"]:
+        assert evidence[key] == game["inputs"]["expected_qb"][key]
+    assert evidence["source_published_at"] is None
+
+
+def test_stale_depth_capture_keeps_provenance_but_cannot_confirm_or_select_qb(tmp_path):
+    at, view, cfg, artifact_id = _setup(tmp_path)
+    depth = view["games"][-1]["inputs"]["expected_qb"]
+    depth.update(status="STALE", reason="DEPTH_CAPTURE_TOO_OLD")
+    result = archive_t60(view, tmp_path, cfg, at, {"qb-test": {"artifact_id": artifact_id}})
+    path = tmp_path / "shadow/qb-change-evidence" / f"{result['saved'][0]}.json"
+    record = json.loads(path.read_text())
+    assert record["expected_qb_source"]["data"] is None
+    assert record["expected_qb_source"]["reason"] == "DEPTH_CAPTURE_TOO_OLD"
+    assert record["expected_qb_source"]["raw_sha256"] == depth["raw_sha256"]
+    assert record["expected_qb_source"]["captured_at"] == depth["captured_at"]
+    for selection in record["teams"].values():
+        assert selection["expected_qb_id"] is None
+        assert selection["expected_starter_source"] is None
+        assert selection["confirmed_starter_id"] is None
+        assert "EXPECTED_QB_ID_MISSING" in selection["uncertainty"]
