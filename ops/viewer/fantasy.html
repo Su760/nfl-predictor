@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Player Lab · NFL Fantasy</title>
+    <link rel="stylesheet" href="/fantasy.css" />
+    <script defer src="/fantasy.js"></script>
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="/fantasy">NFL <span>Player Lab</span></a>
+      <nav aria-label="Main navigation">
+        <a id="forecasts" href="/">NFL forecasts</a
+        ><a href="/fantasy" aria-current="page">Player Lab</a>
+      </nav>
+    </header>
+    <main>
+      <div class="intro">
+        <div>
+          <p class="season" id="season">Fantasy football</p>
+          <h1>Follow the opportunity.</h1>
+          <p>
+            Who is getting the work? Compare observed WR and RB usage, game by
+            game.
+          </p>
+        </div>
+        <div class="freshness">
+          <span id="updated">Loading usage…</span
+          ><button id="reload" type="button">Reload saved data</button>
+        </div>
+      </div>
+      <div id="status" role="status" aria-live="polite"></div>
+      <section aria-label="Usage filters" class="controls">
+        <div>
+          <label for="position">Position</label
+          ><select id="position">
+            <option value="WR">Wide receivers</option>
+            <option value="RB">Running backs</option>
+            <option value="all">WR + RB</option>
+          </select>
+        </div>
+        <div>
+          <label for="window">Viewing window</label
+          ><select id="window">
+            <option value="last">Last game</option>
+            <option value="last3" selected>Last three games</option>
+            <option value="season">Season</option>
+          </select>
+        </div>
+        <div>
+          <label for="metric">Order by</label
+          ><select id="metric">
+            <option value="targets">Targets</option>
+            <option value="target_share">Target share</option>
+            <option value="carries">Carries</option>
+            <option value="carry_share">Carry share</option>
+            <option value="snap_share">Snap share</option>
+            <option value="air_yards">Air yards</option>
+            <option value="red_zone">Red-zone opportunities</option>
+          </select>
+        </div>
+        <div class="search">
+          <label for="search">Find a player or team</label
+          ><input
+            id="search"
+            type="search"
+            placeholder="Name or team abbreviation"
+            autocomplete="off"
+          />
+        </div>
+      </section>
+      <details class="window-help">
+        <summary>How viewing windows handle missed games and byes</summary>
+        <p id="window-note"></p>
+        <p>
+          Teams reflect the latest observed game, not a verified current roster.
+          Players with no current-season stats or matched snap evidence are
+          outside this catalog. Transfer season totals remain unavailable
+          without dated roster history. Same-day games are excluded until the
+          following UTC date and scored schedule data is available.
+        </p>
+      </details>
+      <section aria-labelledby="leaderboard-title">
+        <div class="section-heading">
+          <h2 id="leaderboard-title">Usage leaderboard</h2>
+          <p id="count"></p>
+        </div>
+        <p class="caption">
+          Each metric shows covered games / window games. Unavailable values
+          sort last. Select two players to compare.
+        </p>
+        <div
+          class="table-wrap"
+          tabindex="0"
+          role="region"
+          aria-label="Scrollable usage leaderboard"
+        >
+          <table id="leaderboard">
+            <thead></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <p id="empty" hidden></p>
+      </section>
+      <section class="comparison" aria-labelledby="compare-title">
+        <div class="section-heading">
+          <h2 id="compare-title">Two-player comparison</h2>
+          <button id="clear" type="button">Clear selection</button>
+        </div>
+        <div class="compare-controls">
+          <div>
+            <label for="player-a">First player</label
+            ><select id="player-a">
+              <option value="">Choose a player</option>
+            </select>
+          </div>
+          <div>
+            <label for="player-b">Second player</label
+            ><select id="player-b">
+              <option value="">Choose a player</option>
+            </select>
+          </div>
+        </div>
+        <div id="comparison" aria-live="polite">
+          <p>Choose any two WRs or RBs. Both use the viewing window above.</p>
+        </div>
+      </section>
+      <section class="notes" aria-labelledby="coverage-title">
+        <h2 id="coverage-title">Know the sample</h2>
+        <div id="coverage"></div>
+        <details>
+          <summary>Source coverage and update times</summary>
+          <div id="sources"></div>
+        </details>
+        <details>
+          <summary>Metric definitions</summary>
+          <dl id="definitions"></dl>
+          <p>
+            <strong>Routes:</strong> unavailable in this milestone. Snap share
+            is never a substitute for route participation.
+          </p>
+        </details>
+        <p class="caption">
+          Observed usage only. Data can be corrected after games. This page does
+          not project fantasy points or recommend lineup decisions.
+        </p>
+      </section>
+    </main>
+    <footer>
+      Player Lab · Current-season regular-season usage from nflverse / PFR.
+      Local preview. No automatic source worker.
+    </footer>
+  </body>
+</html>

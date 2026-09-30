@@ -1,5 +1,83 @@
 # Season forecasting execution plan
 
+## Player Lab milestone — September 30, 2026
+
+Authority: current request explicitly says make a short plan then implement in this
+dedicated worktree. This supersedes the earlier fantasy deferral for this milestone.
+No forecast worker or shared runtime/config/model/archive changes. The September 30
+closeout request authorizes a selective milestone commit and normal push to
+`origin/codex/fantasy-player-lab`; no force-push, merge or deployment.
+
+Scope: `.gitignore`, this ledger, `ops/week1_viewer.py`, `ops/viewer/index.html`;
+new `fantasy/{__init__,config,sources,usage,server}.py`, `fantasy/requirements.txt`,
+`configs/fantasy.toml`, `ops/viewer/fantasy.{html,js,css}`,
+`tests/test_fantasy_{usage,sources,server}.py`, `tests/fantasy_ui.cjs`,
+`docs/runbooks/fantasy-player-lab.md`; ignored `.venv-fantasy/`, `.fantasy-cache/`.
+
+- [x] Verify 2026 player/team usage, schedule and snap/PBP sources; retain source
+      receipts, IDs, coverage, null rates and distinct fetch/provider timestamps.
+- [x] Implement isolated fantasy ingestion and pure usage aggregation; team-game
+      windows, summed share denominators, explicit missing observations and byes.
+- [x] Add WR/RB leaderboards, two-player comparison, metric definitions and coverage
+      to the existing app, with separate loopback preview and manual data refresh.
+- [x] Run focused calculations/parser/server and desktop/mobile UI checks, including
+      missing/partial/empty data; document gaps, preview URL and Git state.
+
+Design: navy/blue/teal inherited app palette, system sans, compact usage table as
+the primary workspace, sticky player identity, responsive comparison, sample and
+coverage beside each metric. No projections/rankings, ESPN, trades, chat or betting.
+Last game/last three mean the player's latest observed team's completed games;
+season uses that team's completed season games. Transfers are explicitly labeled
+and season totals are withheld for detected transfers without dated roster history.
+No transfers are present in the verified current WR/RB stats. Missing player rows are unknown,
+never assumed zero; byes do not count as completed games. Shares require complete
+paired numerator/denominator coverage in the selected window.
+
+### Player Lab closeout and roadmap
+
+Closeout scope: verify the saved preview and source gaps, update this roadmap and
+the existing fantasy runbook, preserve unrelated edits, then selectively commit and
+normally push the milestone. Do not rebuild or implement the next milestone.
+
+- [x] Re-read the plan/runbook and verify the saved 2026 Weeks 1–3 snapshot and preview.
+- [x] Verify all 70 snap-only rows retain null usage and Cody White's three unmatched
+      snap rows remain unavailable; check real UI cells and two-player comparison.
+- [x] Re-run focused calculation/parser/viewer and browser checks before publication.
+- [x] Define the next bounded build and preserve unrelated formatting outside the index.
+
+Next bounded build (planned, not implemented): **weekly usage trends, TE support,
+and a local watchlist**, using the existing usage module and exact player IDs.
+Extend the coverage audit to TEs before enabling their metrics. Persist watchlist
+membership locally by GSIS ID; no league sync, recommendations or projections.
+
+Comparison contract for that build:
+
+- Weekly change compares selected NFL week W with W−1, two disjoint periods. Label
+  exact weeks/game dates and each player's observed/expected games; a bye has no
+  game and an unavailable comparison, never a fabricated zero.
+- Optional three-game change compares the latest three completed team games with
+  the immediately preceding three completed team games, with no shared game IDs.
+  Show partial early-season samples and withhold a full-period delta if either
+  period lacks required coverage. Do not compare last game to an overlapping last
+  three, or label a last-three-versus-inclusive-season difference a period change.
+- Compute each period's shares from summed player numerators / summed matching team
+  denominators. Show both counts, per-metric coverage and game samples. Missing
+  observations remain unavailable; missed games are not replaced by older appearances.
+  Retain explicit trade/roster-history limitations and never substitute snaps for routes.
+- Validate disjoint game sets, byes, missed games, shortened history, null denominators,
+  TE coverage and watchlist persistence. Season aggregates remain descriptive context.
+
+Then (planned): **opportunity quality and scoring-specific expected points**. Audit
+field position, air yards and other verified opportunity inputs; define scoring
+settings explicitly. Keep retrospective expected points distinct from forecasts,
+expose sample/coverage and evaluate the expected-points method before relying on it.
+
+Later (planned): **ESPN roster context, waivers/trades, evaluated weekly and
+rest-of-season projections**. Verify league access and scoring/roster rules with a
+manual-import fallback. Require chronological evaluation, baselines, forecast cutoffs,
+uncertainty and prospective evidence before presenting projection-based decisions.
+No part of this roadmap is implemented by the closeout.
+
 Authority: current user request explicitly authorizes implementation, free source access,
 local automation, and coherent verified commits/pushes to codex/nfl-predictor-v2.
 Betting work deferred. Main checkout user edits remain untouched. Private data outside Git.

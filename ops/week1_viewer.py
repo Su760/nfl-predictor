@@ -2,6 +2,7 @@
 
 import json
 import re
+import sys
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -14,6 +15,9 @@ TEAM_ROUTE = re.compile(r"/teams/([A-Z]{2,3})\Z")
 def static_response(path):
     """Explicit asset allowlist: never translate request paths to disk paths."""
     assets = {"/": ("index.html", "text/html; charset=utf-8"),
+              "/fantasy": ("fantasy.html", "text/html; charset=utf-8"),
+              "/fantasy.js": ("fantasy.js", "text/javascript; charset=utf-8"),
+              "/fantasy.css": ("fantasy.css", "text/css; charset=utf-8"),
               "/performance": ("index.html", "text/html; charset=utf-8"),
               "/rankings": ("index.html", "text/html; charset=utf-8"),
               "/insights.js": ("insights.js", "text/javascript; charset=utf-8"),
@@ -45,6 +49,13 @@ def operational_status(data, worker, cfg, clock):
 
 
 def main():
+    # Direct script execution otherwise only places ops/ on sys.path.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    if "--fantasy" in sys.argv[1:]:
+        from fantasy.server import main as fantasy_main
+
+        fantasy_main()
+        return
     from week1_live import configuration
 
     cfg, root = configuration()
@@ -54,6 +65,10 @@ def main():
             asset = static_response(self.path)
             if asset is not None:
                 content, kind, code = asset
+            elif self.path.split("?", 1)[0] == "/api/fantasy":
+                from fantasy.server import response
+
+                content, kind, code = response(self.path)
             elif self.path == "/health":
                 content, kind, code = b'{"status":"ok"}', "application/json", 200
             elif self.path == "/api/insights":

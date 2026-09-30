@@ -7,3 +7,5 @@ data/*.csv
 model.joblib
 .superpowers/
 .nfl-predictor/
+.venv-fantasy/
+.fantasy-cache/

@@ -1,0 +1,15 @@
+season = 2026
+bind = "127.0.0.1"
+port = 8520
+cache_dir = ".fantasy-cache"
+request_timeout_seconds = 60
+stale_after_hours = 24
+forecast_url = "http://127.0.0.1:8510/"
+
+[sources]
+players = "https://github.com/nflverse/nflverse-data/releases/download/stats_player/stats_player_week_{season}.parquet"
+teams = "https://github.com/nflverse/nflverse-data/releases/download/stats_team/stats_team_week_{season}.parquet"
+pbp = "https://github.com/nflverse/nflverse-data/releases/download/pbp/play_by_play_{season}.parquet"
+snaps = "https://github.com/nflverse/nflverse-data/releases/download/snap_counts/snap_counts_{season}.csv"
+ids = "https://github.com/nflverse/nflverse-data/releases/download/players/players.csv"
+schedule = "https://raw.githubusercontent.com/nflverse/nfldata/master/data/games.csv"
