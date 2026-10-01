@@ -1,0 +1,1 @@
+{"name": "players", "url": "https://github.com/nflverse/nflverse-data/releases/download/stats_player/stats_player_week_2023.parquet", "status": "available", "captured_at": "2026-10-01T05:46:32.892723+00:00", "provider_modified_at": "Thu, 13 Aug 2026 16:48:36 GMT", "sha256": "ac776fbd7c9fefdb4069b72304f4c5fa05ae417acd49f6e4e27be14b9d7a4bbc", "source_rows": 18643}

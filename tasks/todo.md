@@ -178,6 +178,20 @@ Next bounded task: prospective descriptive coverage/calibration monitoring with 
 current method frozen; no automated refit/promotion. The 2024–2025 holdout is consumed.
 ESPN sync, rankings, projections, routes and betting remain deferred.
 
+### Frozen experiment preservation — October 1, 2026
+
+Authorized scope: `artifacts/fantasy/expected-points/v1/`, new
+`fantasy/restore.py`, `tests/test_fantasy_restore.py`, `.prettierignore`, this fantasy ledger,
+and the two existing fantasy runbooks. Preserve original artifact bytes, model,
+method/config, gates, consumed holdout, 23 formatting edits and NFL runtime.
+The current continuation authorizes completion and selective normal commit/push.
+
+- [x] Inspect existing frozen files/receipts and package non-secret originals with hashes.
+- [x] Verify isolated restoration, original byte hashes and existing API integrity acceptance;
+      reject corruption/divergent destinations without fitting or evaluating any plays.
+- [x] Document restoration/local-only exclusions and prepare selective normal commit/push;
+      remote SHA verification is the final closeout check. No merge/deploy or new forecast worker.
+
 Authority: current user request explicitly authorizes implementation, free source access,
 local automation, and coherent verified commits/pushes to codex/nfl-predictor-v2.
 Betting work deferred. Main checkout user edits remain untouched. Private data outside Git.

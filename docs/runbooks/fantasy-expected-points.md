@@ -85,12 +85,17 @@ bootstrap intervals for comparator MSE minus context MSE (500 draws, seed 1701);
 positive values favor context. These intervals describe uncertainty and are not another
 selection gate. Correlated player outcomes within a game stay together in each draw.
 
-The manual commands are `.venv-fantasy/bin/python -m fantasy.evaluate validate` and,
-only after the seal is inspected, `.venv-fantasy/bin/python -m fantasy.evaluate holdout`.
-Both refuse to overwrite completed evaluations; holdout also rejects changed code,
-config, validation report or fitted model. Bytes/receipts/model/evaluation JSON stay
-under ignored `.fantasy-cache/{history,expected-points}`. Only aggregate findings belong
-in this document. No forecasting runtime or archives are used.
+The original one-time protocol used `fantasy.evaluate validate` and then
+`fantasy.evaluate holdout` after inspection of the seal. Both stages are completed;
+**do not run them to restore this experiment or reevaluate its consumed holdout**.
+The original command guards refuse completed evaluations and reject changed seals.
+Raw bytes and local working artifacts remain under ignored `.fantasy-cache/`.
+The small public artifacts are now preserved byte-for-byte in
+[`artifacts/fantasy/expected-points/v1`](../../artifacts/fantasy/expected-points/v1/README.md).
+Use `.venv-fantasy/bin/python -m fantasy.restore` to restore the original four JSON
+files and verify the existing API integrity checks against saved aggregate reports.
+No fitting, raw-game evaluation, bootstrap, source refresh or gate changes occur.
+No forecasting runtime or archives are used.
 
 ## Validation decision recorded before opening holdout
 

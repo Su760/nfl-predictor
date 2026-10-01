@@ -1,0 +1,97 @@
+{
+  "bundle_version": 1,
+  "experiment_commit": "148eb58e32ac2425f5d44b2b7974956fe8e2bfce",
+  "files": {
+    "README.md": {
+      "bytes": 3162,
+      "sha256": "76866280d820de79a7de9b29540e005320084339cbc0e74797c72eb15fe37135"
+    },
+    "freeze.json": {
+      "bytes": 6848,
+      "sha256": "b30147cd9bd85af765d98f7949f94819e0e843d18db52e73f6987856999ae404"
+    },
+    "holdout.json": {
+      "bytes": 5747,
+      "sha256": "53ab2a92cf6cadf09e0b6d0f37a928085bb08ac3324621f1e6281eef71755af1"
+    },
+    "model.json": {
+      "bytes": 9874,
+      "sha256": "909d4f1667f3d2093b991f1ffc7eede46ea3d2b4ea3d34646bdfb6416dabf3d6"
+    },
+    "receipts/2019-pbp.json": {
+      "bytes": 346,
+      "sha256": "d7ca7e3a1d5cdd86f1fbdbef6da4929f403a512916953bcfc0706309f707b811"
+    },
+    "receipts/2019-players.json": {
+      "bytes": 364,
+      "sha256": "ec4958e7c64e47c9948135273cf304f0fb9ba43e5996087aec32cd5d2bb2d6f8"
+    },
+    "receipts/2020-pbp.json": {
+      "bytes": 346,
+      "sha256": "1184f3914fed901f0fb4a6a3bc21f0c5c81cfec1aaa915145176156ac440ad72"
+    },
+    "receipts/2020-players.json": {
+      "bytes": 364,
+      "sha256": "1711b66c0cd2d31b622f38031e5175779d63d6023bc2bbcd8af43425c13c45bc"
+    },
+    "receipts/2021-pbp.json": {
+      "bytes": 346,
+      "sha256": "f3f954e2f3f6bfa8e722c045ed98f7d416d9fa5a11b81c7ccb81931246010d65"
+    },
+    "receipts/2021-players.json": {
+      "bytes": 364,
+      "sha256": "9dc9a2603495e7f62f3621c569ca873030aab64d9924026afd8a57ae0e0b85ca"
+    },
+    "receipts/2022-pbp.json": {
+      "bytes": 346,
+      "sha256": "4ffa60d771d5a95cf9559c8dd538b36b878a1db11f19ca1d0b2cadeda88b3058"
+    },
+    "receipts/2022-players.json": {
+      "bytes": 364,
+      "sha256": "dcaa55f45e9c1aeaf6d0aa546e10876bd51be843175fdc4e303e59cf49b02044"
+    },
+    "receipts/2023-pbp.json": {
+      "bytes": 346,
+      "sha256": "ec4ac3fc9662fa63262d08b3db958a5c1f40b3bdd3de0af1cc65d369014ec198"
+    },
+    "receipts/2023-players.json": {
+      "bytes": 364,
+      "sha256": "c7c2628a31ba3f540c13e225480bdddf975ccbd28f62820e56b2b47abf7081b5"
+    },
+    "receipts/2024-pbp.json": {
+      "bytes": 346,
+      "sha256": "ba8421d31c02f5e47e56f92105ce9f18185c81fd40c3b6663ebde20455cee0e8"
+    },
+    "receipts/2024-players.json": {
+      "bytes": 364,
+      "sha256": "005f096178b942a76dd20360f597c47f2f9bf18c66c0bfcb7d9297b17b0330c6"
+    },
+    "receipts/2025-pbp.json": {
+      "bytes": 346,
+      "sha256": "82f81e52f0dca41de3974a7bb6b2fa5c52f5898d737f96a1443f4a0aca13a78b"
+    },
+    "receipts/2025-players.json": {
+      "bytes": 364,
+      "sha256": "33c68438d26e6f161e142757cfbb85ceb74a0aa02cb0346b4949bfdeb2695dd3"
+    },
+    "scoring-policy.toml": {
+      "bytes": 466,
+      "sha256": "ddbbaa9866647c6214b1e076cb1796fdce9930171185d2b61f71aee666623e48"
+    },
+    "validation.json": {
+      "bytes": 3598,
+      "sha256": "721b4f198cef4747579d4a0a492e2d121deaaae6d1a6d290e4e82a99b2b53cf4"
+    }
+  },
+  "frozen_at": "2026-10-01T05:46:35.507874+00:00",
+  "holdout_evaluated_at": "2026-10-01T05:48:01.286972+00:00",
+  "repository_files": {
+    "configs/fantasy_points.toml": "ddbbaa9866647c6214b1e076cb1796fdce9930171185d2b61f71aee666623e48",
+    "fantasy/evaluate.py": "6500d569de1be0f184b5f093295c5ecf8412fe291448447fc38222af190b2d7c",
+    "fantasy/points.py": "9c50467193af5d001c16d2f2350f306aeabb0b23aff67a4014d1410a6d4bd7ec",
+    "fantasy/quality.py": "287fbbf0959f40c7f9f347a8217e60f2385ecb53b6be5719bbe657f87dcf4df9"
+  },
+  "sealed_method_sha256": "44c612e6cd4a9c84146c34af563fe6400af4d1061069dbc6967255ad8a89baae",
+  "sealed_model_sha256": "d07cbf47110ebd0f2fe58cf82fe08552ef4eab2989996705bca9b1d365a13da1",
+  "sealed_validation_sha256": "35c8ee0d47d54acd390837958b5c5123df4652c954bf064fb521013b6ad539a6"
+}

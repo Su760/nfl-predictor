@@ -9,6 +9,42 @@ sports betting remain deferred. The September 30 closeout authorizes a selective
 milestone commit and normal push to `origin/codex/fantasy-player-lab`. No merge or
 deployment is authorized; the worktree and its unrelated edits are preserved.
 
+## Frozen experiment preservation — October 1, 2026
+
+The completed experiment is archived in the versioned, public-only
+[bundle v1](../../artifacts/fantasy/expected-points/v1/README.md): original model,
+freeze, validation and consumed-holdout report bytes, all 14 original historical
+source receipts, scoring-policy copy, provenance manifest and SHA256SUMS (about 40 KB).
+The manifest identifies experiment code commit
+`148eb58e32ac2425f5d44b2b7974956fe8e2bfce` and exact method/config compatibility.
+Sealed canonical-JSON fingerprints and raw file-byte hashes are labeled separately.
+The bundle directory is excluded from automatic formatting to preserve evidence bytes.
+
+```sh
+.venv-fantasy/bin/python -m fantasy.restore
+# Optional isolated destination; does not create or start a preview:
+.venv-fantasy/bin/python -m fantasy.restore --cache-dir /tmp/fantasy-restored-v1
+```
+
+Restore checks every packaged byte and inventory, compatible source/config bytes,
+and the existing API's model/validation seal and saved-report gates before any write.
+It restores only `.fantasy-cache/expected-points/{model,freeze,validation,holdout}.json`;
+identical files are left unchanged and differing/partial local evidence is refused.
+No refit, holdout replay, model selection, bootstrap or acceptance-gate change is allowed.
+The 2024–2025 holdout remains consumed. Source receipt hashes were checked against all
+14 locally saved raw files without fetching or interpreting them again. Retrieval times
+and HTTP modification times remain distinct; no source publication time is inferred.
+
+Preservation validation: 19 focused restore/server checks passed, including exact bytes,
+idempotence, API acceptance without a usage snapshot, corruption, incompatible method/
+repository, divergent local evidence, complete receipt coverage and path traversal.
+An isolated CLI restore also reproduced all four original file-byte hashes. No UI changed.
+Raw current/historical datasets, current snapshot/refresh receipts, environments, caches,
+logs, browser-local watchlists and private NFL archives remain outside the bundle/Git.
+Public model integrity is restorable without those inputs; live usage display still
+requires the separate local snapshot. Next work remains prospective descriptive
+coverage/calibration monitoring with this model frozen, not a new historical experiment.
+
 ## Current milestone 3 — opportunity quality and supported points
 
 The new **Opportunity quality & points** section supports every WR/RB/TE in the
