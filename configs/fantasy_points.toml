@@ -1,0 +1,20 @@
+version = 1
+train_seasons = [2019, 2020, 2021, 2022]
+validation_seasons = [2023]
+holdout_seasons = [2024, 2025]
+field_edges = [5, 10, 20, 50]
+depth_edges = [0, 10, 20]
+prior_opportunities = 100
+minimum_coverage = 0.80
+minimum_rmse_improvement = 0.02
+maximum_mae_regression = 0.0
+maximum_position_rmse_regression = 0.05
+bootstrap_samples = 500
+bootstrap_seed = 1701
+yard_points = 0.1
+touchdown_points = 6.0
+
+[reception_points]
+standard = 0.0
+half_ppr = 0.5
+ppr = 1.0

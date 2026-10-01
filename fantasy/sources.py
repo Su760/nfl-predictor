@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from fantasy.config import configuration
+from fantasy.quality import audit_player
 from fantasy.usage import POSITIONS, number
 
 REQUIRED = {
@@ -140,6 +141,8 @@ def normalize(data, season, today):
         pfr = next(iter(gsis_to_pfr[pid])) if len(gsis_to_pfr[pid]) == 1 else None
         snap = snap_index.get((gid, team, pfr), {}) if pfr and len(pfr_to_gsis[pfr]) == 1 else {}
         targets, carries = number(p.get("targets")), number(p.get("carries"))
+        quality = audit_player(p, pbp_groups[gid])
+        quality["contexts"] = [event["context"] for event in quality.pop("events")]
         rows.append({"player_id": pid, "name": p["player_display_name"],
                      "position": p["position"], "team": team, "game_id": gid,
                      "targets": targets, "carries": carries,
@@ -147,7 +150,8 @@ def normalize(data, season, today):
                      "team_targets": number(t.get("targets")), "team_carries": number(t.get("carries")),
                      "snaps": number(snap.get("offense_snaps")),
                      "team_snaps": totals.get((gid, team)) if snap else None,
-                     "red_zone": red_zone(pbp_groups[gid], pid, team, targets, carries)})
+                     "red_zone": red_zone(pbp_groups[gid], pid, team, targets, carries),
+                     "quality": quality})
     position_coverage = {}
     for position in sorted(POSITIONS):
         subset = [r for r in rows if r["position"] == position]
@@ -178,7 +182,7 @@ def atomic_json(path, payload):
     temporary.replace(path)
 
 
-def fetch_source(name, url, cfg):
+def fetch_source(name, url, cfg, columns=None):
     """Only fresh successful bytes get a receipt; no implicit old-cache fallback."""
     import pyarrow.parquet as pq
 
@@ -195,13 +199,14 @@ def fetch_source(name, url, cfg):
             raise ValueError(f"curl {fetched.returncode}: {fetched.stderr.strip()}")
         raw = body.read_bytes()
         if url.endswith(".parquet"):
-            frame = pq.read_table(io.BytesIO(raw))
-            columns, rows = set(frame.column_names), frame.to_pylist()
+            schema = set(pq.read_schema(io.BytesIO(raw)).names)
+            frame = pq.read_table(io.BytesIO(raw), columns=sorted(schema.intersection(columns)) if columns else None)
+            available_columns, rows = schema, frame.to_pylist()
         else:
             reader = csv.DictReader(io.StringIO(raw.decode("utf-8-sig")))
-            columns, rows = set(reader.fieldnames or []), list(reader)
-        if not REQUIRED[name].issubset(columns):
-            raise ValueError("Provider schema missing: " + ", ".join(sorted(REQUIRED[name] - columns)))
+            available_columns, rows = set(reader.fieldnames or []), list(reader)
+        if not REQUIRED[name].issubset(available_columns):
+            raise ValueError("Provider schema missing: " + ", ".join(sorted(REQUIRED[name] - available_columns)))
         digest = hashlib.sha256(raw).hexdigest()
         captured = datetime.now(UTC).isoformat()
         modified = [line.split(":", 1)[1].strip() for line in headers.read_text().splitlines()

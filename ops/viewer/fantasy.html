@@ -164,6 +164,59 @@
           </p>
         </div>
       </section>
+      <section class="quality" aria-labelledby="quality-title">
+        <h2 id="quality-title">Opportunity quality &amp; points</h2>
+        <p class="caption">
+          Observed WR/RB/TE opportunities in the viewing window above. These
+          values describe past games.
+        </p>
+        <div class="compare-controls">
+          <div>
+            <label for="quality-player">Player</label
+            ><select id="quality-player">
+              <option value="">Choose a player</option>
+            </select>
+          </div>
+          <div>
+            <label for="scoring">Supported scoring</label
+            ><select id="scoring">
+              <option value="standard">Standard</option>
+              <option value="half_ppr">Half-PPR</option>
+              <option value="ppr" selected>PPR</option>
+            </select>
+          </div>
+        </div>
+        <p id="scoring-definition" class="caption"></p>
+        <p class="caption">
+          Excludes turnovers, bonuses, passing, two-point conversions, kicking,
+          defense, returns and recovery touchdowns. This is not a complete
+          league score.
+        </p>
+        <div id="quality-view" aria-live="polite">Choose a player.</div>
+        <details>
+          <summary>Definitions, sample rules and limitations</summary>
+          <dl id="quality-definitions"></dl>
+          <p>
+            Inside-5 is included in inside-10 and red-zone counts; do not add
+            these nested counts. Nullified/deleted plays and two-point tries are
+            excluded. Each metric requires complete coverage for its selected
+            games; unknown values are never zero. Target depth includes
+            incompletions, can be negative, and is unavailable when there are no
+            targets.
+          </p>
+          <p>
+            Actual points use credited box-score components. Expected points
+            additionally require all opportunity counts, context and scoring
+            outcomes to reconcile to the box score. Lateral-attribution
+            mismatches follow this same rule for every player and season. Missed
+            observations are not replaced by earlier games.
+          </p>
+        </details>
+        <details>
+          <summary>Expected-points method and historical evaluation</summary>
+          <div id="quality-method"></div>
+        </details>
+      </section>
       <section class="notes" aria-labelledby="coverage-title">
         <h2 id="coverage-title">Know the sample</h2>
         <div id="coverage"></div>

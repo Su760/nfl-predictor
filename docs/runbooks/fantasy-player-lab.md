@@ -1,4 +1,4 @@
-# Player Lab runbook — milestones 1 and 2
+# Player Lab runbook — milestones 1–3
 
 Local preview: <http://127.0.0.1:8520/fantasy>, branch `codex/fantasy-player-lab`.
 Historical WR/RB/TE usage only: targets, carries, receiving air yards, target/carry/snap
@@ -9,7 +9,100 @@ sports betting remain deferred. The September 30 closeout authorizes a selective
 milestone commit and normal push to `origin/codex/fantasy-player-lab`. No merge or
 deployment is authorized; the worktree and its unrelated edits are preserved.
 
-## Current milestone 2 — weekly usage and local watchlist
+## Current milestone 3 — opportunity quality and supported points
+
+The new **Opportunity quality & points** section supports every WR/RB/TE in the
+existing catalog and the last-game, last-three and season windows. Select a player
+and standard/half-PPR/PPR scoring. It shows separate targets and carries at or inside
+the 20, 10 and 5, plus verified average target depth, explicit opportunity counts,
+covered/expected games and exact game samples. Thresholds are nested, not additive.
+Nullified/deleted plays and two-point attempts are excluded. Zero targets means
+unavailable average depth, not zero depth; negative target depths are valid.
+
+Supported points award 0.1 per rushing/receiving yard, 6 per rushing/receiving TD,
+and 0 / 0.5 / 1 per reception. Turnovers, bonuses, passing, two-point conversions,
+kicking, defense, returns and recovery TDs are excluded. These are component totals,
+not complete league scores. Missing components stay unavailable.
+
+Retrospective expected points passed the fixed historical gates and are shown alongside
+actual points and **actual minus expected**. The simple field-position/target-depth
+baseline was fitted only on 2019–2022, finalized on 2023 and evaluated once on the
+untouched-for-this-method 2024–2025 holdout. There was no post-holdout tuning or refit.
+The app includes method details and MAE/RMSE/signed bias tables by position/scoring;
+[the frozen protocol and full report](fantasy-expected-points.md) document all seasons,
+coverage, exclusions, hashes and uncertainty. This is descriptive opportunity valuation,
+not a forecast, ranking, skill measure or buy/sell recommendation.
+
+Holdout overall (baseline → context RMSE): standard **3.843 → 3.641**, half-PPR
+**4.012 → 3.847**, PPR **4.217 → 4.082**. MAE also improved in all formats and every
+position improved RMSE. Eligible: 5,131/5,138 validation rows, 5,175/5,200 in 2024 and
+5,356/5,373 in 2025. The same general play/box-score reconciliation rule excludes
+unsupported attribution across every season. All model comparisons use identical rows.
+
+### Latest current-season capture and examples
+
+2026 regular season still covers **Weeks 1–3, 48 completed games**, latest PHI–CHI on
+September 28, final 7–27. Source retrieval: **2026-10-01 05:49:17.922–05:49:18.803 UTC**;
+snapshot build: **05:49:19.056 UTC**. These are local capture/build times, not publication
+times. Stats/PBP provider modifications remain September 30, snaps/IDs September 29;
+schedule supplies no modification timestamp. Original receipts and bytes are retained.
+
+There are 433 catalog players / 1,129 observations. All **966 box-score observations**
+have verified zone counts and scoring components; **964** reconcile for expected points.
+The **163 snap-only observations** retain unavailable usage, quality and actual points.
+The same three Cody White snap-ID gaps remain; snaps are not used in this points model.
+
+| Position in box-score rows | Quality/actual covered | Expected-point eligible | Excluded from expected points    |
+| -------------------------- | ---------------------: | ----------------------: | -------------------------------- |
+| WR                         |              457 / 457 |               455 / 457 | 2 outcome-attribution mismatches |
+| RB                         |              274 / 274 |               274 / 274 | none                             |
+| TE                         |              235 / 235 |               235 / 235 | none                             |
+
+Examples from the complete Weeks 1–3 sample:
+
+- Trey McBride: **8 red-zone targets, 6 inside-10 targets, 3 inside-5 targets**;
+  182 air yards / 34 targets = **5.35-yard mean depth**. PPR actual **59.10**,
+  expected **61.35**, difference **−2.25**.
+- Bijan Robinson: **11 red-zone carries, 7 inside-10 carries, 5 inside-5 carries**;
+  mean target depth **−1.75 yards**. PPR actual **77.70**, expected **66.59**,
+  difference **+11.11**. This is descriptive, not evidence of a future reversal.
+- Khalil Shakir (Week 1) and Deebo Samuel Sr. (Week 3) have lateral attribution
+  mismatches. Their actual box-score points and verified quality remain available;
+  three-game expected points and differences are unavailable with **2/3** coverage.
+  The code has no named-player exception; it compares all five scoring components.
+
+### Validation and operation
+
+67 focused Python checks, Ruff and JavaScript syntax passed. Both browser suites passed
+at 1440px/390px: all positions and scoring formats, exact quality/points, sample changes,
+real attribution and missing-data cases, research-only gate behavior, HTTP failure recovery,
+and the existing trends/watchlist checks. No JS errors or page overflow. Screenshots are
+in `/tmp/fantasy-quality-*.png`; the mobile quality table wraps samples within the screen.
+Tests were run red before implementation, including missing modules/API fields and the
+new UI selector, then green after implementation. Initial lint found one unused import,
+which was removed before evaluation was sealed.
+
+```sh
+.venv-fantasy/bin/python -m pytest tests/test_fantasy*.py tests/test_week1_viewer.py -q -o cache_dir=.fantasy-cache/pytest
+.venv-fantasy/bin/ruff check --no-cache fantasy tests/test_fantasy*.py
+node --check ops/viewer/fantasy.js
+NODE_PATH=/Users/supashramesha/.agents/skills/gstack/node_modules node tests/fantasy_quality_ui.cjs
+NODE_PATH=/Users/supashramesha/.agents/skills/gstack/node_modules node tests/fantasy_ui.cjs
+```
+
+Source refresh remains manual. Historical inputs and fitted artifacts live only in the
+ignored fantasy cache. A fresh checkout can build them with the validate/holdout commands
+in the evaluation report, then refresh sources; neither command starts a worker. The API
+withholds expected points if artifacts are absent, inconsistent with the sealed method,
+or fail the fixed gates. The existing NFL processes, configuration, models and archives
+remain untouched. Only the dedicated fantasy preview was restarted.
+
+Next bounded task: prospective descriptive monitoring of opportunity-quality coverage
+and expected-point calibration on newly completed games, with this model frozen and
+no automatic promotion/refit. The 2024–2025 holdout is now consumed. ESPN, rankings,
+projections, routes and betting remain deferred; no merge or deployment is authorized.
+
+## Milestone 2 — weekly usage and local watchlist
 
 TEs now participate in all summary windows, position filters and two-player comparisons.
 Weekly trends show every NFL week through the latest represented completed week,

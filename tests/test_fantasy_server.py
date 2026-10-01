@@ -16,6 +16,8 @@ def test_routes_allowlist_and_no_data_response(tmp_path):
     body, kind, status = server().response("/api/fantasy?window=last3", cfg)
     assert status == 200 and json.loads(body)["players"] == []
     assert json.loads(body)["state"] == "unavailable"
+    assert json.loads(body)["opportunity_method"]["display_supported"] is False
+    assert "target_depth" in json.loads(body)["quality_definitions"]
     for path in ("/../.env", "/raw/anything", "/.fantasy-cache/snapshot.json", "/fantasy.js/../config"):
         assert server().response(path, cfg) is None
     assert server().response("/api/fantasy?window=bad", cfg)[2] == 400
@@ -80,3 +82,12 @@ def test_weekly_te_trends_do_not_change_with_summary_window(tmp_path):
     assert season["players"][0]["metrics"]["targets"]["value"] == 3
     metric = last["trends"]["00-0000001"]["periods"][1]["metrics"]["target_share"]
     assert metric["delta_pp"] == 10
+
+
+def test_research_only_when_sealed_artifacts_are_invalid(tmp_path):
+    root = tmp_path / "expected-points"
+    root.mkdir()
+    for name in ["freeze", "validation", "holdout", "model"]:
+        (root / (name + ".json")).write_text("{}")
+    status, model = server().opportunity_method({"cache": tmp_path})
+    assert status["display_supported"] is False and model is None

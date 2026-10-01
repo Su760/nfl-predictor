@@ -12,3 +12,5 @@
 2026-09-12 | User clarified inspected 2025 holdout is now a known benchmark | Freeze new experiments before evaluation; reserve future prospective forecasts for untouched evidence, and never use actual target starters as historical expected-starter proof.
 
 2026-09-28 | User required closing the 11 introduced collector mypy diagnostics and specified ESPN fantasy | Compare type checks against the same HEAD baseline, finish relevant type-boundary fixes before claiming validation, and record platform-specific deferred requirements without building them.
+
+2026-10-01 | User approved the fantasy quality/points design and ruled out repeated design checkpoints | Carry this approval through implementation and publication within scope; freeze evaluation rules before holdout and do not request the same approval again.

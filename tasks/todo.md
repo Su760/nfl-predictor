@@ -67,7 +67,7 @@ Comparison contract (implemented weekly; optional three-game changes deferred):
 - Validate disjoint game sets, byes, missed games, shortened history, null denominators,
   TE coverage and watchlist persistence. Season aggregates remain descriptive context.
 
-Next bounded build (planned): **opportunity quality and scoring-specific expected points**. Audit
+Completed milestone 3: **opportunity quality and scoring-specific expected points**. Audit
 field position, air yards and other verified opportunity inputs; define scoring
 settings explicitly. Keep retrospective expected points distinct from forecasts,
 expose sample/coverage and evaluate the expected-points method before relying on it.
@@ -114,6 +114,69 @@ passed. TE source audit: 235 stats rows matched to snaps, plus 93 TE-labeled sna
 rows with unavailable usage. Latest-position TE filter: 120 players (one cross-position
 source-label discrepancy). Current 2026 Weeks 1–3 snapshot: 433 players / 1,129 rows.
 See the fantasy runbook for retrieval times, real pp examples and remaining coverage gaps.
+
+### Player Lab milestone 3 — opportunity quality and retrospective points
+
+Design recorded before any historical model comparison: 2026-10-01T02:25:54.022664+00:00.
+Approved October 1: implement this scope without another design-approval checkpoint.
+Freeze exact rules before holdout; finalize only on 2023 validation; no silent refit.
+
+Scope: `fantasy/sources.py`, `fantasy/server.py`; new `fantasy/quality.py`,
+`fantasy/points.py`, `fantasy/evaluate.py`, `configs/fantasy_points.toml`;
+`ops/viewer/fantasy.{html,js,css}`; `tests/test_fantasy_{sources,server}.py`,
+new `tests/test_fantasy_{quality,points,evaluate}.py`, `tests/fantasy_quality_ui.cjs`;
+this fantasy ledger, `docs/runbooks/fantasy-player-lab.md` and new
+`docs/runbooks/fantasy-expected-points.md`. Only ignored `.fantasy-cache/`
+receives source bytes, receipts and fitted artifacts. Preserve all unrelated edits
+and the NFL environment, worker, configurations, models and forecast archives.
+
+- [x] Inspect implementation/provider schema and audit saved 2026 inputs: 966 WR/RB/TE
+      box-score rows, scoring components present; 2,944 credited targets and 2,182
+      carries have field position; all target depths present. Two targets involve
+      laterals and require explicit attribution/reconciliation checks. Independent
+      outcome reconciliation passes 964/966 rows; two lateral-attribution rows differ.
+      Historical stats URLs for every 2019–2025 season return HTTP 200. This was the
+      pre-fit audit; completed evaluation results are recorded below.
+- [x] Implement verified red-zone targets/carries, at-or-inside-10/5 counts (nested,
+      not additive), and receiving target-depth mean/sample; exclude nullified plays.
+- [x] Define supported points: 0.1 per rushing/receiving yard, 6 per rushing/receiving
+      TD, plus 0/0.5/1 per reception for standard/half-PPR/PPR. Exclude turnovers,
+      bonuses, passing, two-point conversions, returns and recovery touchdowns.
+- [x] Freeze one context baseline and chronological evaluation; retain 2026 outside
+      fitting and model selection. Fit 2019–2022 regular seasons; validate 2023;
+      hold out 2024–2025. Do not refit or retune after validation/holdout results.
+- [x] Compare paired player-game predictions to position-specific historical mean
+      points per target/carry learned from the exact same training sample. Candidate:
+      position + opportunity type + field-position bins (<=5, <=10, <=20, <=50, rest)
+      and target-depth bins (<0, 0–<10, 10–<20, >=20), shrunk toward position/type
+      mean with a fixed 100-opportunity prior. Unseen bins use that prior mean.
+      Realized catches, gained yards and TDs are outcomes only, never predictors.
+- [x] Require complete opportunity context and box-score reconciliation for BOTH
+      evaluators on identical player-games; report exclusions by reason and position.
+      Report game-level RMSE/MAE/bias, per-position/scoring results and game-clustered
+      paired uncertainty. Eligibility threshold: >=80% of box-score player-games in
+      every evaluation season. Display gate: >=2% pooled RMSE improvement and no MAE
+      regression for all scoring formats in both validation and holdout, with no
+      position RMSE degradation exceeding 5%. Otherwise ship descriptive metrics and
+      keep expected points research-only. Historical holdout is not prospective proof.
+- [x] Add a separate opportunity-quality/points section using existing player/window
+      selection, explicit definitions, sample coverage, scoring selector and method
+      status. If supported, display expected, actual and actual-minus-expected without
+      recommendations. Preserve leaderboard/trends/watchlist behavior.
+- [x] Run focused parser/scoring/leakage/evaluation and desktop/mobile UI checks,
+      including missing/nullified/sparse cases. Document results and next bounded task.
+- [x] Prepare selective commit and normal push; remote SHA verification is the final
+      closeout check, reported in the session response. No merge/deploy.
+
+Completed evaluation: all fixed gates passed. Validation eligible 5,131/5,138;
+holdout eligible 10,531/10,573. Holdout RMSE baseline/context: standard 3.843/3.641,
+half-PPR 4.012/3.847, PPR 4.217/4.082. No post-holdout tuning/refit. See
+`docs/runbooks/fantasy-expected-points.md` for all position/scoring results and exclusions.
+67 focused Python tests, lint, syntax and both desktop/mobile browser suites passed.
+
+Next bounded task: prospective descriptive coverage/calibration monitoring with the
+current method frozen; no automated refit/promotion. The 2024–2025 holdout is consumed.
+ESPN sync, rankings, projections, routes and betting remain deferred.
 
 Authority: current user request explicitly authorizes implementation, free source access,
 local automation, and coherent verified commits/pushes to codex/nfl-predictor-v2.

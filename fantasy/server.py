@@ -5,19 +5,52 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 from fantasy.config import ROOT, configuration
+from fantasy.evaluate import gate, method_hash
+from fantasy.points import fingerprint, settings, summarize_quality
+from fantasy.quality import DEFINITIONS
 from fantasy.trends import weekly_trends
 from fantasy.usage import METRICS, WINDOW_NOTE, summarize
 
 
+def opportunity_method(cfg):
+    status = {"display_supported": False, "status": "Not evaluated / artifact unavailable"}
+    try:
+        root = cfg["cache"] / "expected-points"
+        freeze, validation, holdout, model = [json.loads((root / (name + ".json")).read_text())
+                                              for name in ["freeze", "validation", "holdout", "model"]]
+        if (freeze["method_sha256"] != method_hash() or model["config"] != settings()
+                or fingerprint(model) != freeze["model_sha256"]
+                or fingerprint(validation) != freeze["validation_sha256"]
+                or holdout["model_sha256"] != freeze["model_sha256"]):
+            raise ValueError("Method artifacts do not match the sealed evaluation")
+        failures = gate(validation, model["config"]) + gate(holdout, model["config"])
+        supported = not failures
+        status = {"display_supported": supported,
+                  "status": "Retrospective baseline passed fixed gates" if supported else "Research only: fixed gates failed",
+                  "failures": failures, "frozen_at": freeze["frozen_at"],
+                  "model_sha256": freeze["model_sha256"], "train_seasons": model["train_seasons"],
+                  "validation": validation, "holdout": {k: holdout[k] for k in ["coverage", "scores", "uncertainty"]}}
+        return status, model if supported else None
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        status["detail"] = str(error)
+        return status, None
+
+
 def payload(cfg, window):
+    method, model = opportunity_method(cfg)
+    policy = settings()
     common = {"season": cfg["season"], "window": window, "window_note": WINDOW_NOTE,
               "definitions": {k: {"label": v[0], "definition": v[1]} for k, v in METRICS.items()},
+              "quality_definitions": DEFINITIONS, "opportunity_method": method,
+              "scoring": {k: policy[k] for k in ["yard_points", "touchdown_points", "reception_points"]},
               "forecast_url": cfg["forecast_url"], "stale_after_hours": cfg["stale_after_hours"]}
     try:
         data = json.loads((cfg["cache"] / "snapshot.json").read_text())
         if data["season"] != cfg["season"]:
             raise ValueError("Saved snapshot is for a different season")
         players = summarize(data["rows"], data["games"], window)
+        for player in players:
+            player["quality"] = summarize_quality(player, window, model)
         age = (datetime.now(UTC) - datetime.fromisoformat(data["updated_at"])).total_seconds()
         state = "stale" if age < 0 or age > cfg["stale_after_hours"] * 3600 else "available"
         common.update({k: data[k] for k in ("updated_at", "coverage", "sources")})

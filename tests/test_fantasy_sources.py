@@ -59,6 +59,8 @@ def test_normalization_keeps_missing_optional_sources_null():
     assert row["targets"] == 1 and row["team_targets"] == 10
     assert row["snaps"] is None and row["air_yards"] is None
     assert row["red_zone"] is None
+    assert row["quality"]["metrics"]["rz_targets"] is None
+    assert row["quality"]["reason"] == "incomplete_or_duplicate_pbp"
 
 
 def test_te_ingestion_and_schedule_preservation():

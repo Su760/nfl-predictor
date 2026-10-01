@@ -473,6 +473,49 @@ footer {
   border: 1px solid var(--line);
   border-radius: 8px;
 }
+.quality {
+  margin-top: 28px;
+  padding: 20px;
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.quality details {
+  margin-top: 16px;
+}
+.quality .quality-table th:first-child {
+  white-space: normal;
+  min-width: 140px;
+  max-width: 250px;
+}
+.quality .quality-table td {
+  white-space: normal;
+  min-width: 100px;
+}
+@media (max-width: 600px) {
+  .quality {
+    padding: 14px;
+  }
+  .quality .quality-table {
+    table-layout: fixed;
+  }
+  .quality .quality-table th {
+    white-space: normal;
+  }
+  .quality .quality-table td {
+    min-width: 0;
+  }
+  .quality .quality-table th:first-child {
+    min-width: 0;
+    width: 36%;
+  }
+  .quality .quality-table th:nth-child(2) {
+    width: 26%;
+  }
+  .quality .quality-table th:nth-child(3) {
+    width: 38%;
+  }
+}
 .watchlist-filter {
   display: flex;
   align-items: center;

@@ -188,6 +188,127 @@ function options() {
   });
 }
 
+const qualityLabels = {
+  rz_targets: "Red-zone targets",
+  rz_carries: "Red-zone carries",
+  i10_targets: "Inside-10 targets",
+  i10_carries: "Inside-10 carries",
+  i5_targets: "Inside-5 targets",
+  i5_carries: "Inside-5 carries",
+  target_depth: "Mean target depth (yards)",
+};
+const fixedPoints = (x) => (available(x) ? x.toFixed(2) : "Unavailable");
+
+function qualityOptions() {
+  const selected = $("quality-player").value;
+  $("quality-player").innerHTML =
+    '<option value="">Choose a player</option>' +
+    snapshot.players
+      .map(
+        (p) =>
+          `<option value="${esc(p.player_id)}">${esc(p.name)} · ${esc(p.team)} ${esc(p.position)}</option>`,
+      )
+      .join("");
+  if (snapshot.players.some((p) => p.player_id === selected))
+    $("quality-player").value = selected;
+}
+
+function renderQualityMethod(scoring) {
+  const method = snapshot.opportunity_method || {
+    status: "Method unavailable",
+    display_supported: false,
+  };
+  const periods = [
+    ["2023 validation", method.validation],
+    ["2024–2025 holdout", method.holdout],
+  ];
+  $("quality-method").innerHTML =
+    `<p><strong>${esc(method.status)}</strong></p><p>Fit on 2019–2022 only; no 2026 fitting or selection. Position, target/carry type, field-position and target-depth bins estimate historical mean points, with a fixed 100-opportunity shrinkage prior. Unseen bins use the position/type mean. Realized catches, yards gained and touchdowns are outcomes, never predictors of their own expected points.</p><p>Comparator: historical position-specific points per target/carry from identical training samples. Both evaluations use identical eligible player-games. Display requires ≥80% coverage in each evaluation season, ≥2% overall RMSE improvement and no overall MAE regression in all formats, with no position RMSE regression above 5%, in both validation and holdout.</p><p>Signed evaluation bias is expected minus actual. The player difference above is actual minus expected. Neither is a forecast, player-skill estimate, uncertainty interval or automatic buy/sell signal. Historical corrected data and excluded attribution gaps limit generalization.</p>`;
+  if (method.failures?.length)
+    $("quality-method").innerHTML +=
+      `<p>${method.failures.map(esc).join("; ")}</p>`;
+  if (!periods.every(([, period]) => period?.scores?.[scoring])) return;
+  $("quality-method").innerHTML +=
+    `<div class="table-wrap" tabindex="0" role="region" aria-label="Historical points evaluation"><table><thead><tr><th>Period / position</th><th>Player-games</th><th>Baseline MAE / RMSE / bias</th><th>Context MAE / RMSE / bias</th></tr></thead><tbody>${periods
+      .map(([label, period]) =>
+        Object.entries(period.scores[scoring])
+          .map(
+            ([position, m]) =>
+              `<tr><th scope="row">${esc(label)} · ${esc(position)}</th><td>${m.n}</td><td>${[m.baseline.mae, m.baseline.rmse, m.baseline.bias].map(fixedPoints).join(" / ")}</td><td>${[m.context.mae, m.context.rmse, m.context.bias].map(fixedPoints).join(" / ")}</td></tr>`,
+          )
+          .join(""),
+      )
+      .join(
+        "",
+      )}</tbody></table></div><p>Coverage and exclusions (box-score player-games):</p><ul>${periods
+      .map(([, period]) =>
+        Object.entries(period.coverage)
+          .map(([season, positions]) =>
+            Object.entries(positions)
+              .map(
+                ([pos, c]) =>
+                  `<li>${esc(season)} ${esc(pos)}: ${c.eligible}/${c.total} eligible; exclusions: ${
+                    Object.entries(c.excluded)
+                      .map(
+                        ([reason, n]) =>
+                          `${esc(reason.replaceAll("_", " "))} ${n}`,
+                      )
+                      .join(", ") || "none"
+                  }.</li>`,
+              )
+              .join(""),
+          )
+          .join(""),
+      )
+      .join("")}</ul>`;
+}
+
+function renderQuality() {
+  if (!snapshot) return;
+  const scoring = $("scoring").value,
+    policy = snapshot.scoring;
+  $("scoring-definition").textContent = policy
+    ? `${policy.yard_points} points per rushing/receiving yard + ${policy.touchdown_points} per rushing/receiving touchdown + ${policy.reception_points[scoring]} per reception. Negative yardage counts.`
+    : "Scoring definition unavailable.";
+  $("quality-definitions").innerHTML = Object.entries(
+    snapshot.quality_definitions || {},
+  )
+    .map(([k, d]) => `<dt>${esc(qualityLabels[k] || k)}</dt><dd>${esc(d)}</dd>`)
+    .join("");
+  renderQualityMethod(scoring);
+  const player = snapshot.players.find(
+      (p) => p.player_id === $("quality-player").value,
+    ),
+    q = player?.quality;
+  if (!q) {
+    $("quality-view").textContent =
+      "Choose a player with captured opportunity data.";
+    return;
+  }
+  const rows = Object.entries(qualityLabels)
+    .map(([key, label]) => {
+      const m = q.metrics[key],
+        depth = key === "target_depth",
+        stat = key.endsWith("carries") ? "carries" : "targets";
+      const counts = q.games.map((g) => g[stat]);
+      const count =
+        counts.length && counts.every(available)
+          ? counts.reduce((a, b) => a + b, 0)
+          : null;
+      const sample = depth
+        ? `${value("count", m.covered_targets)} / ${value("count", m.expected_targets)} targets with depth`
+        : `${value("count", count)} ${stat} in window`;
+      return `<tr><th scope="row" title="${esc(snapshot.quality_definitions?.[key])}">${esc(label)}</th><td>${depth ? fixedPoints(m.value) : value("count", m.value)}</td><td>${m.covered_games} / ${m.expected_games} games<span class="cell-note">${sample}</span></td></tr>`;
+    })
+    .join("");
+  const points = q.points[scoring],
+    supported = snapshot.opportunity_method?.display_supported;
+  const pointRow = (label, m, attr = "") =>
+    `<tr ${attr}><th scope="row">${label}</th><td>${fixedPoints(m.value)}</td><td>${m.covered_games} / ${m.expected_games} games</td></tr>`;
+  $("quality-view").innerHTML =
+    `<h3>${esc(player.name)} · ${esc(player.team)} ${esc(player.position)}</h3><p class="caption">Weeks ${player.weeks.join(", ")} · ${player.observed_games}/${player.expected_games} observed games</p><div class="table-wrap" tabindex="0" role="region" aria-label="Player opportunity quality"><table class="quality-table"><thead><tr><th>Metric</th><th>Value</th><th>Sample / coverage</th></tr></thead><tbody>${rows}${pointRow("Actual supported points", points.actual)}${supported ? pointRow("Retrospective expected points", points.expected, 'data-expected="true"') + `<tr data-expected="true"><th scope="row">Actual minus expected</th><td>${available(points.difference) && points.difference > 0 ? "+" : ""}${fixedPoints(points.difference)}</td><td>Same window; requires both complete samples</td></tr>` : ""}</tbody></table></div><p class="caption">${supported ? "Expected points value these observed opportunities using historical averages. This difference is descriptive, not a recommendation." : "Expected points are unavailable for display; see research status below. Actual points and descriptive quality remain available where verified."}</p><details><summary>Exact game sample and expected-points eligibility</summary><ul>${q.games.map((g) => `<li>Week ${g.week} · ${esc(g.date)} · ${esc(g.game_id)}: ${g.reason ? esc(g.reason.replaceAll("_", " ")) : "Reconciled counts, context and scoring components"}</li>`).join("")}</ul></details>`;
+}
+
 function renderBoard() {
   const query = $("search").value.trim().toLowerCase(),
     position = $("position").value,
@@ -353,6 +474,8 @@ async function load() {
   $("leaderboard").querySelector("tbody").innerHTML = "";
   $("comparison").textContent = "Loading this window…";
   $("trends").textContent = "Loading weekly usage…";
+  $("quality-view").textContent = "Loading opportunity quality…";
+  $("quality-method").textContent = "Loading method status…";
   $("count").textContent = "";
   $("empty").hidden = true;
   $("reload").disabled = true;
@@ -367,6 +490,8 @@ async function load() {
     snapshot = result;
     renderEvidence();
     options();
+    qualityOptions();
+    renderQuality();
     trendOptions();
     renderWatchlist();
     renderTrends();
@@ -381,6 +506,10 @@ async function load() {
       "Comparison unavailable until this window loads.";
     $("count").textContent = "";
     $("trends").textContent = "Weekly usage unavailable until data loads.";
+    $("quality-view").textContent =
+      "Opportunity quality unavailable until data loads.";
+    $("quality-method").textContent =
+      "Method status unavailable until data loads.";
   } finally {
     if (version === requestVersion) $("reload").disabled = false;
   }
@@ -419,6 +548,8 @@ $("clear").onclick = () => {
   }
 };
 $("trend-player").onchange = renderTrends;
+$("quality-player").onchange = renderQuality;
+$("scoring").onchange = renderQuality;
 $("watchlist-only").onchange = () => {
   if (snapshot) renderBoard();
 };
