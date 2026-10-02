@@ -99,6 +99,254 @@ def enable_live_comparison(cfg, at):
     }
 
 
+def saved_t60_baseline(tmp_path, view, due, **changes):
+    game = view["games"][0]
+    baseline = {
+        **game["prediction"],
+        "origin": "T60",
+        "generated_at": stamp(due - timedelta(seconds=1)),
+        **changes,
+    }
+    baseline.pop("revision_id", None)
+    baseline.pop("published_at", None)
+    assert shadow.publish(tmp_path, baseline, datetime.fromisoformat(game["kickoff"]),
+                          lambda: datetime.fromisoformat(baseline["generated_at"]))
+    saved = all_records(tmp_path, game["game_id"])[0]
+    game["predictions"].append(saved)
+    return saved
+
+
+def baseline_sensitive_candidate(kind, baseline, game, artifact, clock):
+    return {
+        "status": "VALID",
+        "p_home": baseline["p_home"] - 0.1,
+        "p_away": baseline["p_away"] + 0.1,
+        "p_tie": baseline["p_tie"],
+        "evidence": {"calculated_from": baseline["revision_id"]},
+    }
+
+
+def test_t60_calculation_uses_saved_horizon_while_update_uses_latest(tmp_path):
+    at, kick, view, cfg = fixture(tmp_path)
+    shadow.run_shadow(view, tmp_path, cfg, lambda: at, predictor=baseline_sensitive_candidate)
+    due = kick - timedelta(hours=1)
+    t60 = saved_t60_baseline(tmp_path, view, due)
+    game = view["games"][0]
+    game["prediction"] = {
+        **t60, "origin": "UPDATE", "revision_id": "latest-update",
+        "generated_at": stamp(due), "published_at": stamp(due),
+        "p_home": 0.8, "p_away": 0.19,
+    }
+    before = copy.deepcopy(view)
+    shadow.run_shadow(view, tmp_path, cfg, lambda: due, predictor=baseline_sensitive_candidate)
+    rows = all_records(tmp_path / "shadow/qb-test", game["game_id"])
+    horizon = next(row for row in rows if row["origin"] == "T60")
+    update = next(row for row in rows if row["origin"] == "UPDATE")
+    assert horizon["paired_baseline"] == t60
+    assert horizon["p_home"] == pytest.approx(0.5)
+    assert horizon["explanation"]["evidence"]["calculated_from"] == t60["revision_id"]
+    assert update["paired_baseline"] == game["prediction"]
+    assert update["p_home"] == pytest.approx(0.7)
+    assert view == before
+
+
+@pytest.mark.parametrize("invalid", [
+    "absent", "unreceipted", "old_schedule", "future", "outside_window", "probabilities",
+])
+def test_t60_missing_valid_saved_baseline_is_excluded(tmp_path, invalid):
+    at, kick, view, cfg = fixture(tmp_path)
+    due = kick - timedelta(hours=1)
+    game = view["games"][0]
+    if invalid == "unreceipted":
+        game["predictions"].append({**game["prediction"], "origin": "T60"})
+    elif invalid != "absent":
+        changes = {
+            "old_schedule": {"schedule_version": "old"},
+            "future": {"generated_at": stamp(due + timedelta(seconds=1))},
+            "outside_window": {"generated_at": stamp(due - timedelta(minutes=11))},
+            "probabilities": {"p_home": 0.9, "p_away": 0.9},
+        }[invalid]
+        saved_t60_baseline(tmp_path, view, due, **changes)
+    enable_live_comparison(cfg, at)
+    out = shadow.run_shadow(view, tmp_path, cfg, lambda: due,
+                            predictor=baseline_sensitive_candidate)
+    rows = all_records(tmp_path / "shadow/qb-test", game["game_id"])
+    assert not any(row["origin"] == "T60" for row in rows)
+    assert any(row["origin"] == "ON_DEMAND" for row in rows)
+    state = out["games"][game["game_id"]]["qb-test"]
+    assert state["origin_exclusions"]["T60"] == "NO_VALID_SAVED_OFFICIAL_T60_BASELINE"
+    card = shadow.score_shadow(
+        view["games"], {"qb-test": rows}, kick + timedelta(hours=1),
+        {"qb-test": at}, policy=out["comparison_policy"], states=out["games"],
+    )["qb-test"]["horizons"]["T60"]
+    assert card["operational_coverage"]["missing_predictions"][0]["reason"] == (
+        "NO_VALID_SAVED_OFFICIAL_T60_BASELINE"
+    )
+
+
+def test_t60_recalculation_keeps_availability_guard(tmp_path):
+    _, kick, view, cfg = fixture(tmp_path)
+    due = kick - timedelta(hours=1)
+    saved_t60_baseline(tmp_path, view, due)
+
+    def guarded(kind, baseline, game, artifact, clock):
+        if baseline["origin"] == "T60":
+            return {"status": "FALLBACK", "reason": "EXPECTED_QB_LISTED_INACTIVE"}
+        return baseline_sensitive_candidate(kind, baseline, game, artifact, clock)
+
+    out = shadow.run_shadow(view, tmp_path, cfg, lambda: due, predictor=guarded)
+    state = out["games"][view["games"][0]["game_id"]]["qb-test"]
+    assert state["origin_exclusions"]["T60"] == "EXPECTED_QB_LISTED_INACTIVE"
+    assert not any(row["origin"] == "T60" for row in
+                   all_records(tmp_path / "shadow/qb-test", view["games"][0]["game_id"]))
+
+
+def test_t60_calculation_crossing_deadline_never_publishes(tmp_path):
+    _, kick, view, cfg = fixture(tmp_path)
+    due = kick - timedelta(hours=1)
+    saved_t60_baseline(tmp_path, view, due)
+    clock = [due]
+
+    def slow(kind, baseline, game, artifact, at):
+        if baseline["origin"] == "T60":
+            clock[0] = due + timedelta(minutes=10)
+        return baseline_sensitive_candidate(kind, baseline, game, artifact, at)
+
+    out = shadow.run_shadow(view, tmp_path, cfg, lambda: clock[0], predictor=slow)
+    state = out["games"][view["games"][0]["game_id"]]["qb-test"]
+    assert state["publication_attempts"]["T60"] == "NOT_PUBLISHED_DEADLINE"
+    assert not any(row["origin"] == "T60" for row in
+                   all_records(tmp_path / "shadow/qb-test", view["games"][0]["game_id"]))
+
+
+@pytest.mark.parametrize("kind", ["qb", "calibration"])
+def test_t60_real_model_calculates_against_horizon_probabilities(tmp_path, kind):
+    at, kick, view, cfg = fixture(tmp_path)
+    due = kick - timedelta(hours=1)
+    t60 = saved_t60_baseline(tmp_path, view, due)
+    game = view["games"][0]
+    game["prediction"] = {**game["prediction"], "p_home": 0.8, "p_away": 0.19}
+    artifact = {"created_at": stamp(at), "production_policy_sha256": "policy"}
+    if kind == "calibration":
+        artifact.update(
+            schema_version="season-probability-artifact-v1",
+            applies_to="production_elo_conditional_home", role="challenger",
+            production_change="NONE", train_through=2023, validation_season=2024,
+            known_benchmark_season=2025, prospective_season=2030,
+            calibration={"family": "sigmoid", "slope": 0.8, "intercept": -0.1,
+                         "epsilon": 0.000001},
+            calibration_bounds={"minimum_slope": 0.5, "maximum_slope": 1.5,
+                                "maximum_abs_intercept": 0.5},
+        )
+        artifact["artifact_sha256"] = digest(canonical(artifact))
+    else:
+        game["inputs"] = {
+            "expected_qb": {
+                "status": "AVAILABLE", "captured_at": stamp(at),
+                "source_updated_at": stamp(at),
+                "data": {"PIT": {"gsis_id": "h"}, "ATL": {"gsis_id": "a"}},
+            },
+            "injuries": {"status": "AVAILABLE", "data": []},
+            "inactives": {"status": "AVAILABLE", "data": []},
+        }
+        artifact.update(
+            artifact_id="qb-fixture", coefficient=0.2, minimum_qb_games=2, minimum_qb_attempts=20,
+            qb_shrinkage_attempts=20, eligibility="INELIGIBLE_FOR_PROMOTION",
+            player_values={
+                "h": {"epa": 50.0, "games": 3, "attempts": 50, "as_of": stamp(at)},
+                "a": {"epa": 0.0, "games": 3, "attempts": 50, "as_of": stamp(at)},
+            },
+            team_references={"PIT": 0.0, "ATL": 0.0}, data_as_of=stamp(at),
+        )
+    spec = cfg["shadow_models"][0]
+    Path(spec["artifact_path"]).write_bytes(canonical(artifact))
+    spec.update(kind=kind, artifact_sha256=digest(canonical(artifact)))
+    shadow.run_shadow(view, tmp_path, cfg, lambda: due, predictor=shadow._candidate)
+    row = next(p for p in all_records(tmp_path / "shadow/qb-test", game["game_id"])
+               if p["origin"] == "T60")
+    expected = shadow._candidate(kind, t60, game, artifact, due)
+    latest = shadow._candidate(kind, game["prediction"], game, artifact, due)
+    assert row["paired_baseline"] == t60
+    assert row["p_home"] == pytest.approx(expected["p_home"])
+    assert row["p_home"] != pytest.approx(latest["p_home"])
+
+
+def test_existing_mismatched_t60_is_not_replaced_or_backfilled(tmp_path):
+    _, kick, view, cfg = fixture(tmp_path)
+    due = kick - timedelta(hours=1)
+    game = view["games"][0]
+    legacy = {
+        **game["prediction"], "role": "challenger", "model_version": "qb-test",
+        "origin": "T60", "generated_at": stamp(due), "input_fingerprint": "legacy",
+        "paired_baseline": copy.deepcopy(game["prediction"]),
+    }
+    for key in ("revision_id", "published_at"):
+        legacy.pop(key)
+    location = tmp_path / "shadow/qb-test"
+    assert shadow.publish(location, legacy, kick, lambda: due)
+    before = all_records(location, game["game_id"])[0]
+    saved_t60_baseline(tmp_path, view, due)
+    shadow.run_shadow(view, tmp_path, cfg, lambda: due, predictor=baseline_sensitive_candidate)
+    shadow.run_shadow(view, tmp_path, cfg, lambda: kick, predictor=baseline_sensitive_candidate)
+    assert [p for p in all_records(location, game["game_id"]) if p["origin"] == "T60"] == [before]
+
+
+def test_t60_invalid_calculated_probability_is_rejected(tmp_path):
+    _, kick, view, cfg = fixture(tmp_path)
+    due = kick - timedelta(hours=1)
+    saved_t60_baseline(tmp_path, view, due)
+
+    def invalid(kind, baseline, game, artifact, clock):
+        result = baseline_sensitive_candidate(kind, baseline, game, artifact, clock)
+        if baseline["origin"] == "T60":
+            result.update(p_home=0.9, p_away=0.9)
+        return result
+
+    shadow.run_shadow(view, tmp_path, cfg, lambda: due, predictor=invalid)
+    assert not any(p["origin"] == "T60" for p in
+                   all_records(tmp_path / "shadow/qb-test", view["games"][0]["game_id"]))
+
+
+@pytest.mark.parametrize("origin", ["T72", "FINAL"])
+def test_other_named_origins_keep_latest_baseline(tmp_path, origin):
+    at, kick, view, cfg = fixture(tmp_path)
+    game = view["games"][0]
+    if origin == "T72":
+        kick = at + timedelta(hours=72)
+        game["kickoff"] = game["prediction"]["kickoff"] = stamp(kick)
+    due = kick - timedelta(seconds=cfg["origin_seconds"][origin])
+    shadow.run_shadow(view, tmp_path, cfg, lambda: due, predictor=baseline_sensitive_candidate)
+    row = next(p for p in all_records(tmp_path / "shadow/qb-test", game["game_id"])
+               if p["origin"] == origin)
+    assert row["paired_baseline"] == game["prediction"]
+
+
+def test_t60_receipt_crossing_deadline_keeps_forecast_unpublished(tmp_path, monkeypatch):
+    import season_live
+
+    _, kick, view, cfg = fixture(tmp_path)
+    due = kick - timedelta(hours=1)
+    saved_t60_baseline(tmp_path, view, due)
+    clock = [due]
+    original_write = season_live.write_once
+
+    def crossing(path, value):
+        original_write(path, value)
+        if path.name.endswith(".receipt.json") and "qb-test" in path.parts:
+            record_path = path.with_name(path.name.removesuffix(".receipt.json") + ".json")
+            if json.loads(record_path.read_text())["origin"] == "T60":
+                clock[0] = due + timedelta(minutes=10)
+
+    monkeypatch.setattr(season_live, "write_once", crossing)
+    out = shadow.run_shadow(view, tmp_path, cfg, lambda: clock[0],
+                            predictor=baseline_sensitive_candidate)
+    assert out["games"][view["games"][0]["game_id"]]["qb-test"]["publication_attempts"]["T60"] == (
+        "NOT_PUBLISHED_DEADLINE"
+    )
+    assert not any(p["origin"] == "T60" for p in
+                   all_records(tmp_path / "shadow/qb-test", view["games"][0]["game_id"]))
+
+
 def test_live_comparison_policy_freezes_models_cutoffs_outcomes_and_metrics(tmp_path):
     at, _kick, _view, cfg = fixture(tmp_path)
     enable_live_comparison(cfg, at)
@@ -135,6 +383,7 @@ def test_live_comparison_scores_identical_games_and_exposes_missing_input_covera
     at, kick, view, cfg = fixture(tmp_path)
     enable_live_comparison(cfg, at)
     due = kick - timedelta(hours=1)
+    saved_t60_baseline(tmp_path, view, due)
     shadow.run_shadow(view, tmp_path, cfg, lambda: due, predictor=candidate)
     first = view["games"][0]
     records = [

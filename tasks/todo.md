@@ -693,3 +693,26 @@ remains blocked by the documented source gap. Live worker PID3006 healthy21:46:5
 LaunchAgent points to this V2 worktree. Next collection: PIT–CLE Oct1 T6018:05–18:25CDT;
 both have three finalized games and complete QB attempt rows. Full evidence, saved
 Week3 table, supported-source requirement and exact checkpoint are in season-live.md.
+
+## Prospective T60 baseline pairing repair — October 2, 2026
+
+User-approved execution sequence: recover original PIT–CLE evidence and settlement;
+trace committed code; reproduce with focused tests; make the smallest prospective
+correction; validate narrowly, document, selectively commit/push and activate through
+the existing service. Preserve historical records, eligibility and all model/policy
+contracts. No historical evaluation or backfill.
+
+Edit scope: ops/season_shadow.py, tests/test_season_shadow.py,
+tests/test_season_live.py if required for same-cycle integration,
+docs/runbooks/season-live.md, and this appended roadmap section only.
+Prior unrelated ledger edits remain unstaged.
+
+- [x] Recover original T60 IDs, pairs, publication times and final settlement;
+      establish root cause and save a preservation manifest.
+- [x] Add failing same-cycle and per-origin calculation regressions plus missing
+      baseline/cutoff coverage; implement the prospective T60 baseline selection.
+- [x] Run focused publication, QB availability and collector tests; verify frozen
+      contracts and original archives remain unchanged; update runbook.
+- [ ] Review/stage only related changes, commit and normally push V2; verify remote.
+- [ ] Safely activate the committed code through the existing LaunchAgent; verify
+      one worker, current health and next prospective collection opportunity.

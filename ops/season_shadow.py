@@ -6,6 +6,7 @@ import copy
 import json
 import re
 import tomllib
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -180,6 +181,8 @@ def _score_with_uncertainty(rows):
 
 def _missing_reason(states, model_states, game_id, model, horizon):
     state = (states or {}).get(game_id, {}).get(model, {})
+    if reason := state.get("origin_exclusions", {}).get(horizon):
+        return reason
     if state.get("reason") and state.get("reason") != "NO_POSTKICKOFF_SHADOW_PUBLICATION":
         return state["reason"]
     model_state = (model_states or {}).get(model, {})
@@ -344,6 +347,46 @@ def refresh_qb_state(view, artifact, spec, root, cfg, clock):
     except Exception as error:
         # Optional challenger ingestion must never abort production view publication.
         raise ValueError(f"QB_STATE_REFRESH_FAILED: {type(error).__name__}: {error}") from error
+
+
+def _saved_t60_baseline(
+    root: Path, game: dict[str, Any], at: datetime, cfg: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Select a receipt-verified official T60 without using the latest UPDATE slot."""
+    instant = cast(Callable[[str], datetime], _instant)
+    read_records = cast(Callable[[Path, str], list[dict[str, Any]]], all_records)
+    window = cast(
+        Callable[[datetime, str, datetime, dict[str, Any]], tuple[str, datetime, datetime]],
+        origin_state,
+    )
+    kick = instant(game["kickoff"])
+    candidates = [
+        row for row in read_records(root, game["game_id"])
+        if row.get("origin") == "T60"
+        and row.get("game_id") == game["game_id"]
+        and row.get("home") == game["home"]
+        and row.get("away") == game["away"]
+        and row.get("schedule_version") == game["schedule_version"]
+        and _valid_prediction(row, game, kick, at)
+        and window(kick, "T60", instant(row["generated_at"]), cfg)[0] == "DUE"
+        and window(kick, "T60", _prediction_time(row), cfg)[0] == "DUE"
+    ]
+    return max(candidates, key=_prediction_time) if candidates else None
+
+
+def _forecast_fingerprint(
+    baseline: dict[str, Any], prediction: dict[str, Any], artifact_ref: str, evidence_ref: str
+) -> str:
+    hash_bytes = cast(Callable[[bytes], str], digest)
+    encode = cast(Callable[[object], bytes], canonical)
+    return hash_bytes(
+        encode({
+            "baseline": baseline.get("revision_id"),
+            "artifact": artifact_ref,
+            "evidence": evidence_ref,
+            "probabilities": [prediction[k] for k in ("p_home", "p_away", "p_tie")],
+        })
+    )
 
 
 def run_shadow(view, root, cfg, clock, *, predictor=None):
@@ -602,15 +645,8 @@ def run_shadow(view, root, cfg, clock, *, predictor=None):
                 ]
             if prediction.get("status") not in {"VALID", "AVAILABLE"}:
                 continue
-            fingerprint = digest(
-                canonical(
-                    {
-                        "baseline": baseline.get("revision_id"),
-                        "artifact": artifact_ref,
-                        "evidence": states["evidence"]["record_id"],
-                        "probabilities": [prediction[k] for k in ("p_home", "p_away", "p_tie")],
-                    }
-                )
+            fingerprint = _forecast_fingerprint(
+                baseline, prediction, artifact_ref, states["evidence"]["record_id"]
             )
             current = [
                 p
@@ -629,8 +665,32 @@ def run_shadow(view, root, cfg, clock, *, predictor=None):
                 origins.append("UPDATE")
             publication_failed = False
             attempts = {}
+            exclusions = {}
             for origin in origins:
                 generated = clock()
+                origin_baseline, origin_prediction, origin_fingerprint = baseline, prediction, fingerprint
+                if origin == "T60":
+                    origin_baseline = _saved_t60_baseline(root, game, generated, cfg)
+                    if origin_baseline is None:
+                        exclusions[origin] = "NO_VALID_SAVED_OFFICIAL_T60_BASELINE"
+                        attempts[origin] = "EXCLUDED"
+                        continue
+                    try:
+                        origin_prediction = (predictor or _candidate)(
+                            spec["kind"], origin_baseline, prediction_game, artifact, generated
+                        )
+                    except (ValueError, KeyError, TypeError, ArithmeticError) as error:
+                        exclusions[origin] = str(error)
+                        attempts[origin] = "EXCLUDED"
+                        continue
+                    if origin_prediction.get("status") not in {"VALID", "AVAILABLE"}:
+                        exclusions[origin] = origin_prediction.get("reason") or "T60_CANDIDATE_UNAVAILABLE"
+                        attempts[origin] = "EXCLUDED"
+                        continue
+                    origin_fingerprint = _forecast_fingerprint(
+                        origin_baseline, origin_prediction, artifact_ref, states["evidence"]["record_id"]
+                    )
+                    generated = clock()
                 deadline = (
                     origin_state(kick, origin, generated, cfg)[2] if origin in ORIGINS else kick
                 )
@@ -659,13 +719,13 @@ def run_shadow(view, root, cfg, clock, *, predictor=None):
                     "required_prior_result_ids": prediction_game["qb_state_required_game_ids"],
                     "source_version": source_version,
                     "code_hashes": code_hashes,
-                    "paired_baseline": copy.deepcopy(baseline),
-                    "input_fingerprint": fingerprint,
+                    "paired_baseline": copy.deepcopy(origin_baseline),
+                    "input_fingerprint": origin_fingerprint,
                     "inputs": saved_inputs,
                     "prospective_evidence_id": states["evidence"]["record_id"],
                     "reasons": [origin, "SHADOW_ONLY; FROZEN_BASELINE_REFERENCE_AND_SAVED_INPUTS"],
-                    **{k: prediction[k] for k in ("p_home", "p_away", "p_tie")},
-                    "explanation": copy.deepcopy(prediction),
+                    **{k: origin_prediction[k] for k in ("p_home", "p_away", "p_tie")},
+                    "explanation": copy.deepcopy(origin_prediction),
                     "promotion": "NOT_APPROVED",
                 }
                 if not _valid_prediction(record, game, kick, generated, allow_challenger=True):
@@ -687,6 +747,7 @@ def run_shadow(view, root, cfg, clock, *, predictor=None):
                     "latest_saved": max(saved, key=_prediction_time) if saved else None,
                 }
             states[name]["publication_attempts"] = attempts
+            states[name]["origin_exclusions"] = exclusions
             states[name]["saved_revisions"] = len(saved)
             states[name]["history"] = [
                 {

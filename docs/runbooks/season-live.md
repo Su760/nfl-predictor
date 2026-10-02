@@ -1103,3 +1103,95 @@ The normal worker will use the unchanged guarded depth-inference path. At that w
 inspect the newly appended collector record: expect three prior games/team, original
 source timestamps/IDs, `confirmed_starter_id=null` absent a supported confirmation path,
 and valid paired T60 forecast references or explicit missing/availability-conflict reasons.
+
+## Prospective T60 baseline pairing repair — October 2, 2026
+
+### Recovered PIT–CLE collection and separate settlement
+
+Read original hash/receipt/durability-verified records for `2026_04_PIT_CLE`.
+Four collector snapshots were captured October 1 at 18:07:24.119430,
+18:13:08.492201, 18:15:46.382468 and 18:21:29.089310 CDT, all inside
+the unchanged 18:05–18:25 T60 window. These are one game, not four samples.
+Both teams have three observed-final prior games and complete attempts
+(PIT 40/40/34; CLE 22/30/31), with no expected-QB availability conflict.
+Starter IDs remain rank-1 inferences: Rodgers `00-0023459`, Watson
+`00-0033537`; confirmed starter IDs remain null. Source publication times
+remain unknown where the provider did not supply them.
+
+| Saved origin                                  | Revision ID                                                        | Paired baseline ID                                                 | Published October 1 CDT |
+| --------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------ | ----------------------- |
+| Official T60                                  | `5180a1462d733a1539f77ef0bb192a3b874de264fc47aba0618056e06066f1ca` | none                                                               | 18:06:59.928917         |
+| QB T60                                        | `b7a34207f77f0c81fc7306cdec7e1740bfa4d91697b52370379dcab50ecc1a83` | `0d46d5b5b6e16de92124c570f73bf8c5a42662f738320000c76d3f6bd394dd78` | 18:07:24.094795         |
+| Calibration T60 (separate research reference) | `a6d68827c0736f3d43fd3085a8329d681be37cc8293502a48dc752e3e1041388` | `0d46d5b5b6e16de92124c570f73bf8c5a42662f738320000c76d3f6bd394dd78` | 18:07:18.887252         |
+
+Paired baseline `0d46d5b5…` is production UPDATE, published 18:06:59.930157,
+1.240 milliseconds after T60. Its probabilities equal the production T60
+probabilities, but its revision identity differs. The PIT–CLE collector row
+remains excluded from the frozen same-official-T60-revision comparison.
+Existing live shadow scorecards may settle the original paired UPDATE; their
+historical forecasts, scorecards and eligibility decisions are not rewritten.
+
+Separately, the original outcome journal records FINAL, PIT 24–CLE 27,
+version 1, first observed October 1 22:45:07.573593 CDT, from an ESPN
+capture at 22:45:05.907015. Forecast delivery and final-result settlement
+are independent; settlement does not cure the pairing mismatch.
+
+### Confirmed cause and prospective correction
+
+At original commit `db2a8c7`, `season_live.py:525` selects the latest current
+record, appends a due T60 plus material UPDATE in the same cycle at lines
+526–531, and selects the latest generated record again at lines 589–598.
+`season_shadow.py:517` uses that latest `game["prediction"]`, calculates a
+candidate once at lines 533–535, and reuses it for every publication origin.
+This exactly explains the original UPDATE pairing in both T60 shadows.
+
+The prospective fix changes only shadow T60 publication. It reads the saved
+official T60 through the existing receipt/hash/durability validator, requires
+matching game/team/kickoff/schedule identity, production role, valid probabilities
+and pre-cutoff publication inside the T60 window, then invokes the actual
+QB/calibration calculator against that selected baseline. Probability, explanation,
+fingerprint and paired ID all come from that calculation. No baseline ID is
+substituted onto a candidate calculated from UPDATE. T72, FINAL, ON_DEMAND,
+UPDATE and conditional-scenario behavior keep the existing latest baseline.
+
+No valid saved official T60 produces origin exclusion
+`NO_VALID_SAVED_OFFICIAL_T60_BASELINE`. Candidate availability failures retain
+their explicit reason. Actual generation, publication and receipt durability
+still must beat the existing T60 deadline. A later cycle may retry only while
+the original window remains open. An existing T60 shadow is never replaced,
+and a closed window is never backfilled.
+
+This repairs execution of the existing `prospective-qb-change-v1` pairing
+requirement. It does not change the model, artifact/config hashes, comparison
+contract, eligibility rule or experiment start time; no new experiment version
+is necessary. New shadow records retain the corrected source-code hashes.
+
+### Focused validation and next prospective verification
+
+The same-cycle production integration regression fails against committed old
+shadow code (T60 pairs to UPDATE) and passes after correction. A separate
+regression gives T60 and UPDATE different probabilities and checks calculated
+values plus explanation provenance, so relabeling alone cannot pass. Actual
+QB and calibration calculators are exercised against both baselines.
+
+Focused command:
+`PYTHONDONTWRITEBYTECODE=1 .venv/bin/pytest -q -p no:cacheprovider tests/test_season_shadow.py tests/test_season_live.py tests/test_season_qb_evidence.py tests/test_season_qb.py`.
+Includes missing/unreceipted/future/old-schedule/out-of-window/invalid-probability
+baselines; availability guards; calculation and receipt deadline crossings;
+unchanged other origins; original mismatched-T60 preservation; and collector
+source/cutoff checks. Result: **98 passed**, zero failures/skips. Changed-file Ruff and diff checks
+passed. Comparable strict mypy remains failing on the inherited ops graph:
+HEAD 571 diagnostics, current 569, zero new normalized diagnostics; no clean
+typecheck claim. A SHA-256 manifest check found **87,311 existing immutable
+files unchanged**, including forecast/receipt/proof, collector, model and policy
+objects. No broad suite or historical evaluation is run.
+
+Next opportunity from the current schedule: **IND at WAS, October 4**,
+kickoff **08:30 CDT**, T60 **07:20–07:40 CDT** (target **07:30**).
+At **07:45 CDT**, read worker health and original newly appended collector
+records. Verify exact equality of QB paired-baseline revision and saved official
+T60 revision, receipt-valid publication inside the window, three prior games/team,
+original source timestamps/IDs and expected-QB availability. Report calibration
+separately. Verify the shadow source-version contains the committed corrected
+`season_shadow.py` hash; report explicit source/availability or delivery exclusions.
+Do not wait for this window or alter PIT–CLE records.

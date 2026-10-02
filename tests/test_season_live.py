@@ -172,6 +172,65 @@ def test_duplicate_checks_do_not_create_duplicate_revisions(tmp_path, monkeypatc
     assert first["games"][0]["predictions"] == second["games"][0]["predictions"]
 
 
+def test_same_cycle_t60_update_keeps_shadow_pair_on_official_t60(tmp_path, monkeypatch):
+    import season_shadow
+
+    cfg, at, base_fetch = fake_tick(monkeypatch, tmp_path)
+    cfg.pop("simulation_config", None)
+    original_model = live.model_for_current_results
+
+    def model(*args):
+        rater, proof = original_model(*args)
+        return rater, {**proof, "policy_sha256": "policy"}
+
+    monkeypatch.setattr(live, "model_for_current_results", model)
+    artifact = tmp_path / "artifact.json"
+    artifact.write_bytes(live.canonical({"production_policy_sha256": "policy"}))
+    cfg["shadow_models"] = [{
+        "name": "calibration-test", "kind": "calibration",
+        "artifact_path": str(artifact), "artifact_sha256": live.digest(artifact.read_bytes()),
+        "prospective_start": live.stamp(at),
+    }]
+    cfg["qb_change_evidence_enabled"] = False
+
+    def predict(kind, baseline, game, artifact, clock):
+        return {
+            "status": "VALID", "p_home": baseline["p_home"],
+            "p_away": baseline["p_away"], "p_tie": baseline["p_tie"],
+            "evidence": {"calculated_from": baseline["revision_id"]},
+        }
+
+    monkeypatch.setattr(season_shadow, "_candidate", predict)
+    clock = [at]
+
+    def tick():
+        clock[0] += timedelta(microseconds=1)
+        return clock[0]
+
+    live.run_once(cfg, tmp_path, clock=tick, fetcher=base_fetch)
+    due = at + timedelta(days=2, hours=-1)
+    clock[0] = due
+
+    def changed_source(*args):
+        source = base_fetch(*args)
+        for check in source["checks"].values():
+            check["captured_at"] = live.stamp(due)
+        source["games"][0]["inputs"]["qb"]["status"] = "AVAILABLE"
+        return source
+
+    view = live.run_once(cfg, tmp_path, clock=tick, fetcher=changed_source)
+    game = view["games"][0]
+    baseline = next(p for p in game["predictions"] if p["origin"] == "T60")
+    assert game["prediction"]["origin"] == "UPDATE"
+    assert game["prediction"]["published_at"] > baseline["published_at"]
+    rows = live.all_records(tmp_path / "shadow/calibration-test", game["game_id"])
+    t60 = next(p for p in rows if p["origin"] == "T60")
+    update = next(p for p in rows if p["origin"] == "UPDATE")
+    assert t60["paired_baseline"] == baseline
+    assert t60["explanation"]["evidence"]["calculated_from"] == baseline["revision_id"]
+    assert update["paired_baseline"] == game["prediction"]
+
+
 def test_stale_required_sources_block_before_any_forecast(tmp_path, monkeypatch):
     cfg, at, fetcher = fake_tick(monkeypatch, tmp_path, stale=True)
     with pytest.raises(ValueError, match="REQUIRED_INPUT_STALE"):
