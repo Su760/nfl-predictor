@@ -744,7 +744,7 @@ independent rules review, selective commit and normal push. No merge/deployment.
 - [x] Time the unchanged 2,000-draw standalone refresh; publish exact blocked reason if any, preserving all guards and draws.
 - [x] Verify focused rules/totals/freshness tests and desktop/mobile UI; independent rules review.
 - [x] Correct refresh runbook and record later roadmap.
-- [ ] Selectively commit/push and verify remote SHA.
+- [x] Selectively commit/push and verify remote SHA.
 
 Design: reuse viewer slate (#142d4e), blue (#175cd3), teal (#087f8c),
 muted (#53657b), pale background (#f3f6fa) and amber (#985006). Existing
@@ -775,3 +775,11 @@ Production viewer 8510 and forecast worker 39405 were not restarted. Navigation
 is inserted only by the new viewer code, keeping the old running viewer's
 routes coherent. No inline simulation, model/policy, shadow/forecast or service
 changes. Pending Oct2 19:10 execution and Oct4 07:45 receipts remain intact.
+
+Feature commit `247b916ce0ed106ae0c3caef4d2811ea6d9e301c` was normally
+pushed to codex/nfl-predictor-v2; `git ls-remote` matched that SHA.
+As of October 2 18:48 CDT, the saved simulation remains COMPLETE/FRESH
+for the 17:07 source snapshot. Exactly one healthy forecast worker, PID 39405,
+next normal refresh 19:07:27 CDT; production dashboard 8510 health is OK.
+No worker or production viewer activation occurred. Oct2 19:10 and
+Oct4 07:45 verification checkpoints remain pending, without waiting.
