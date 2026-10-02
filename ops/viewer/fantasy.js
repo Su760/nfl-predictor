@@ -388,12 +388,21 @@ function renderComparison() {
   const header = `<tr><th scope="col">Metric</th>${players.map((p) => `<th scope="col">${esc(p.name)}<span class="player-meta">${esc(p.team)} ${esc(p.position)} · Weeks ${p.weeks.join(", ")}<br>${p.observed_games}/${p.expected_games} observed games</span></th>`).join("")}</tr>`;
   const body = metricKeys
     .map((k) => {
-      const [a, b] = players.map((p) => p.metrics[k].value);
-      return `<tr><th scope="row">${esc(snapshot.definitions[k].label)}</th>${players.map((p, i) => `<td class="${available(a) && available(b) && (i === 0 ? a > b : b > a) ? "higher" : ""}">${cell(k, p.metrics[k])}${share(k) && available(p.metrics[k].value) ? `<span class="cell-note">${p.metrics[k].numerator} / ${p.metrics[k].denominator}</span>` : ""}</td>`).join("")}</tr>`;
+      const displayed = players.map((p) => {
+        const metric = { ...p.metrics[k] };
+        if ($("comparison-mode").value === "per-game" && !share(k))
+          metric.value =
+            available(metric.value) && metric.expected_games > 0
+              ? metric.value / metric.expected_games
+              : null;
+        return metric;
+      });
+      const [a, b] = displayed.map((m) => m.value);
+      return `<tr><th scope="row">${esc(snapshot.definitions[k].label)}${$("comparison-mode").value === "per-game" && !share(k) ? " / game" : ""}</th>${players.map((p, i) => `<td class="${available(a) && available(b) && (i === 0 ? a > b : b > a) ? "higher" : ""}">${cell(k, displayed[i])}${share(k) && available(p.metrics[k].value) ? `<span class="cell-note">${p.metrics[k].numerator} / ${p.metrics[k].denominator}</span>` : ""}</td>`).join("")}</tr>`;
     })
     .join("");
   $("comparison").innerHTML =
-    `<div class="table-wrap"><table class="compare-table"><thead>${header}</thead><tbody>${body}</tbody></table></div><p class="caption">Teal marks the larger observed value, not a recommendation. Shares use summed numerators and denominators shown above.</p><div class="game-details">${players.map((p) => `<details><summary>${esc(p.name)}: game sample</summary><p class="caption">${esc(p.window_note)}</p><ul>${p.games.map((g) => `<li>Week ${g.week} · ${esc(g.date)} · ${esc(g.teams.join(" at "))}: ${g.observed ? `${value("targets", g.usage.targets)} targets, ${value("carries", g.usage.carries)} carries` : "No player observation; unavailable"}</li>`).join("")}</ul></details>`).join("")}</div>`;
+    `<div class="table-wrap"><table class="compare-table"><thead>${header}</thead><tbody>${body}</tbody></table></div><p class="caption">Per-game counts divide complete window totals by that player's expected window games; missing coverage stays unavailable. Shares always use summed numerators and denominators, never an average of weekly shares. Teal marks the larger observed value, not a recommendation.</p><div class="game-details">${players.map((p) => `<details><summary>${esc(p.name)}: game sample</summary><p class="caption">${esc(p.window_note)}</p><ul>${p.games.map((g) => `<li>Week ${g.week} · ${esc(g.date)} · ${esc(g.teams.join(" at "))}: ${g.observed ? `${value("targets", g.usage.targets)} targets, ${value("carries", g.usage.carries)} carries` : "No player observation; unavailable"}</li>`).join("")}</ul></details>`).join("")}</div>`;
 }
 
 function renderEvidence() {
@@ -550,6 +559,9 @@ $("clear").onclick = () => {
 $("trend-player").onchange = renderTrends;
 $("quality-player").onchange = renderQuality;
 $("scoring").onchange = renderQuality;
+$("comparison-mode").onchange = () => {
+  if (snapshot) renderComparison();
+};
 $("watchlist-only").onchange = () => {
   if (snapshot) renderBoard();
 };

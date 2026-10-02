@@ -1,13 +1,53 @@
-# Player Lab runbook — milestones 1–3
+# Player Lab runbook — milestones 1–4
 
 Local preview: <http://127.0.0.1:8520/fantasy>, branch `codex/fantasy-player-lab`.
 Historical WR/RB/TE usage only: targets, carries, receiving air yards, target/carry/snap
 shares and verified red-zone opportunities. Three viewing windows, searchable and
 sortable leaderboards, two-player comparisons, metric definitions, sample counts,
-source coverage and timestamps. ESPN sync, projections/rankings, trades, chat and
+source coverage and timestamps. Weekly receiving projections are now experimental;
+ESPN sync, rankings, trades, chat and
 sports betting remain deferred. The September 30 closeout authorizes a selective
 milestone commit and normal push to `origin/codex/fantasy-player-lab`. No merge or
 deployment is authorized; the worktree and its unrelated edits are preserved.
+
+## Milestone 4 — weekly receiving projections (experimental)
+
+A separate **Upcoming receiving projections** sheet estimates WR/TE targets, catches
+and receiving yards with nominal 80% ranges, opponents, kickoff, cutoff/horizon, samples,
+source timestamps and unverified-availability assumptions. All positions' receiving
+history, including RB/FB/QB, consumes allocation; team attempts and credited targets
+are distinct, and unallocated targets remain explicit. It never uses future actual volume,
+rosters or opportunities. Existing expected points remain retrospective and frozen.
+
+The one fixed retrospective comparison failed criteria: target/catch RMSE were worse
+than rolling averages and outcome coverage was only 6,565/9,102 (72.13%). Yard RMSE
+improved 28.779→27.956. 2,537 missing rows stay DNP/no-stat/unknown, not zero. The feature
+is experimental; no tuning or second test-set comparison followed. Priors: 2019–2022;
+2023 calibrates intervals; 2024–2025 corrected files are already-inspected retrospective
+benchmarks, with no historical publication-time proof. [Full protocol/results](fantasy-receiving.md).
+
+273 WR/TE Week 4 predictions were genuinely archived before kickoff at
+**2026-10-02 23:01:58.658 UTC**, with first-version bytes preserved in
+[the receiving bundle](../../artifacts/fantasy/receiving/v1/README.md). Raw data, subsequent
+working archives, local outcomes and browser calls remain excluded from Git.
+Forecast generation is manual: `.venv-fantasy/bin/python -m fantasy.receiving_data`.
+Reload reads saved archives only. The fantasy preview is still port 8520; only its
+process restarted. Existing viewer allowlists now include the new script/API for a
+future normal viewer restart; the running NFL session was not restarted.
+
+**My prediction** saves browser-local ID/game versions before captured kickoff,
+without overwriting older calls. Numeric outcomes later match by stable IDs; missing
+outcomes remain unavailable. Device-clock timestamps are not trusted/tamper-proof,
+changing origin loses access, and concurrent tab saves use last-write-wins. Corrupt,
+blocked or full storage visibly refuses unsaved changes. Comparison now toggles window
+totals/per-game counts; shares retain summed denominators and missing coverage stays null.
+
+Validation: 92 focused Python checks, lint/syntax, new desktop/mobile projection/storage
+checks, and existing fantasy UI checks. The frozen expected-points model/artifact bytes
+and compatibility remain unchanged. Next bounded task: **grade first Week 4 prospective
+forecasts on October 6 after numeric outcomes arrive**, by position/tier/horizon with
+missing coverage and all versions preserved. No automated tuning, TD/full-point forecasts,
+ESPN sync, rankings, trade advice, routes or betting.
 
 ## Frozen experiment preservation — October 1, 2026
 

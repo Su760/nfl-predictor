@@ -17,6 +17,7 @@ def static_response(path):
     assets = {"/": ("index.html", "text/html; charset=utf-8"),
               "/fantasy": ("fantasy.html", "text/html; charset=utf-8"),
               "/fantasy.js": ("fantasy.js", "text/javascript; charset=utf-8"),
+              "/receiving.js": ("receiving.js", "text/javascript; charset=utf-8"),
               "/fantasy.css": ("fantasy.css", "text/css; charset=utf-8"),
               "/performance": ("index.html", "text/html; charset=utf-8"),
               "/rankings": ("index.html", "text/html; charset=utf-8"),
@@ -65,7 +66,7 @@ def main():
             asset = static_response(self.path)
             if asset is not None:
                 content, kind, code = asset
-            elif self.path.split("?", 1)[0] == "/api/fantasy":
+            elif self.path.split("?", 1)[0] in {"/api/fantasy", "/api/fantasy/receiving"}:
                 from fantasy.server import response
 
                 content, kind, code = response(self.path)

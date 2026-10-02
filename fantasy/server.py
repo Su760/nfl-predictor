@@ -8,6 +8,7 @@ from fantasy.config import ROOT, configuration
 from fantasy.evaluate import gate, method_hash
 from fantasy.points import fingerprint, settings, summarize_quality
 from fantasy.quality import DEFINITIONS
+from fantasy.receiving_data import saved_sheet
 from fantasy.trends import weekly_trends
 from fantasy.usage import METRICS, WINDOW_NOTE, summarize
 
@@ -70,10 +71,13 @@ def response(path, cfg=None):
     parsed = urlsplit(path)
     assets = {"/fantasy": ("fantasy.html", "text/html; charset=utf-8"),
               "/fantasy.js": ("fantasy.js", "text/javascript; charset=utf-8"),
+              "/receiving.js": ("receiving.js", "text/javascript; charset=utf-8"),
               "/fantasy.css": ("fantasy.css", "text/css; charset=utf-8")}
     if parsed.path in assets:
         name, kind = assets[parsed.path]
         return (ROOT / "ops/viewer" / name).read_bytes(), kind, 200
+    if parsed.path == "/api/fantasy/receiving":
+        return json.dumps(saved_sheet(cfg or configuration()), allow_nan=False).encode(), "application/json", 200
     if parsed.path != "/api/fantasy":
         return None
     window = parse_qs(parsed.query).get("window", ["last3"])[0]

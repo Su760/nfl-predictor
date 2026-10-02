@@ -1,2 +1,4 @@
 # Sealed evidence must retain exact original bytes.
 artifacts/fantasy/expected-points/
+# Receiving protocol/model/report bytes are sealed separately.
+artifacts/fantasy/receiving/

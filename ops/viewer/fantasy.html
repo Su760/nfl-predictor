@@ -6,6 +6,7 @@
     <title>Player Lab · NFL Fantasy</title>
     <link rel="stylesheet" href="/fantasy.css" />
     <script defer src="/fantasy.js"></script>
+    <script defer src="/receiving.js"></script>
   </head>
   <body>
     <header class="site-header">
@@ -31,6 +32,83 @@
         </div>
       </div>
       <div id="status" role="status" aria-live="polite"></div>
+      <section class="receiving" aria-labelledby="receiving-title">
+        <div class="section-heading">
+          <h2 id="receiving-title">Upcoming receiving projections</h2>
+          <button id="receiving-reload" type="button">
+            Reload archived projections
+          </button>
+        </div>
+        <p class="caption">
+          Future WR/TE targets, catches and receiving yards, separate from
+          past-game expected points below. Conditional on the stated
+          availability assumptions. No touchdowns or fantasy-point forecasts.
+        </p>
+        <p id="receiving-status" role="status" aria-live="polite">
+          Loading archived projections…
+        </p>
+        <label for="receiving-filter">Projection position</label>
+        <select id="receiving-filter">
+          <option value="all">WR + TE</option>
+          <option value="WR">WR</option>
+          <option value="TE">TE</option>
+        </select>
+        <div id="receiving-sheet"></div>
+        <details>
+          <summary>Team volume, unallocated targets and method</summary>
+          <div id="receiving-method"></div>
+        </details>
+        <details>
+          <summary>Retrospective benchmark and interval coverage</summary>
+          <div id="receiving-benchmark"></div>
+        </details>
+        <h3>My prediction</h3>
+        <p class="caption">
+          Browser-local, append-only versions for this site address. Every save
+          preserves earlier calls. Device-clock timestamps are not tamper-proof.
+          No account, sync or server submission. Entries lock at the captured
+          kickoff; schedule changes can affect that time.
+        </p>
+        <form id="my-prediction-form">
+          <div class="prediction-inputs">
+            <div>
+              <label for="prediction-player">Player / game</label
+              ><select id="prediction-player">
+                <option value="">Choose a projected player</option>
+              </select>
+            </div>
+            <div>
+              <label for="prediction-targets">Targets</label
+              ><input
+                id="prediction-targets"
+                type="number"
+                min="0"
+                step="0.1"
+                required
+              />
+            </div>
+            <div>
+              <label for="prediction-catches">Catches</label
+              ><input
+                id="prediction-catches"
+                type="number"
+                min="0"
+                step="0.1"
+                required
+              />
+            </div>
+            <div>
+              <label for="prediction-yards">Receiving yards</label
+              ><input id="prediction-yards" type="number" step="0.1" required />
+            </div>
+          </div>
+          <button id="prediction-save" type="submit">
+            Save new prediction version
+          </button>
+        </form>
+        <p id="prediction-status" role="status" aria-live="polite"></p>
+        <div id="prediction-history"></div>
+      </section>
       <section aria-label="Usage filters" class="controls">
         <div>
           <label for="position">Position</label
@@ -144,6 +222,11 @@
           <h2 id="compare-title">Two-player comparison</h2>
           <button id="clear" type="button">Clear selection</button>
         </div>
+        <label for="comparison-mode">Comparison counts</label>
+        <select id="comparison-mode">
+          <option value="totals">Window totals</option>
+          <option value="per-game">Per game</option>
+        </select>
         <div class="compare-controls">
           <div>
             <label for="player-a">First player</label

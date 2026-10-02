@@ -174,8 +174,9 @@ half-PPR 4.012/3.847, PPR 4.217/4.082. No post-holdout tuning/refit. See
 `docs/runbooks/fantasy-expected-points.md` for all position/scoring results and exclusions.
 67 focused Python tests, lint, syntax and both desktop/mobile browser suites passed.
 
-Next bounded task: prospective descriptive coverage/calibration monitoring with the
-current method frozen; no automated refit/promotion. The 2024–2025 holdout is consumed.
+Next bounded task (updated by approved milestone 4): grade the first Week 4 receiving
+forecasts on October 6, with observed/missing coverage and the current methods frozen;
+no automated refit/promotion. The 2024–2025 holdout is consumed.
 ESPN sync, rankings, projections, routes and betting remain deferred.
 
 ### Frozen experiment preservation — October 1, 2026
@@ -191,6 +192,37 @@ The current continuation authorizes completion and selective normal commit/push.
       reject corruption/divergent destinations without fitting or evaluating any plays.
 - [x] Document restoration/local-only exclusions and prepare selective normal commit/push;
       remote SHA verification is the final closeout check. No merge/deploy or new forecast worker.
+
+### Weekly receiving projections — October 2, 2026
+
+User approves this bounded scope, plan then implementation; independent data/leakage
+and evaluation subagents review, main agent integrates. This supersedes receiving
+projection deferral only. Frozen expected-points experiment remains unchanged.
+Scope: new `fantasy/receiving{,_data,_eval}.py`, `configs/fantasy_receiving.toml`,
+`tests/test_fantasy_receiving*.py`, `tests/fantasy_receiving_ui.cjs`,
+`ops/viewer/receiving.js`; `fantasy/server.py`, `ops/week1_viewer.py` (asset/API allowlists only),
+`ops/viewer/fantasy.{html,js,css}`,
+this fantasy ledger, `docs/runbooks/fantasy-player-lab.md`, new
+`docs/runbooks/fantasy-receiving.md`, `artifacts/fantasy/receiving/v1/`, `.prettierignore`.
+Local receiving raw/cache/forecast archives stay in ignored `.fantasy-cache/receiving/`.
+No NFL runtime/config/worker/archive changes; preserve 23 unrelated formatting diffs.
+
+- [x] Audit public raw receiving/time fields and record fixed protocol before results.
+      Preflight discovered historical OAK/LV label mismatch; normalize configured franchise
+      aliases before strict identity checks, preserving source game IDs. No benchmark run yet.
+- [x] Implement prior-game team volume/all-pass-catcher allocation and shrunk catch/
+      yard efficiency; coherent estimates/remainder, intervals and prior-only population.
+- [x] Run one chronological retrospective comparison on paired populations, with
+      coverage, missing/DNP uncertainty, position/tier errors and interval diagnostics.
+- [x] Archive genuine pre-kickoff forecasts; add independent upcoming sheet, browser-local
+      append-only personal predictions and comparison totals/per-game display.
+- [x] Validate calculations/leakage/storage, desktop/mobile and frozen artifact integrity;
+      update roadmap/runbook, selectively commit and normally push with remote SHA check.
+
+Design: existing navy (#142d4e), teal (#087f8c), blue (#175cd3), gray paper (#f3f6fa),
+muted (#516276), system sans. Separate future sheet above past usage, compact rows
+and wide scrollable table on mobile; game/cutoff/sample assumptions sit beside numbers.
+No fantasy-point/TD forecasts, injuries inferred from absence, routes, sync or trade advice.
 
 Authority: current user request explicitly authorizes implementation, free source access,
 local automation, and coherent verified commits/pushes to codex/nfl-predictor-v2.

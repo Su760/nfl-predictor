@@ -1,0 +1,23 @@
+version = 1
+train_seasons = [2019, 2020, 2021, 2022]
+calibration_seasons = [2023]
+benchmark_seasons = [2024, 2025]
+lookback_games = 4
+team_prior_games = 3
+share_prior_targets = 40
+catch_prior_targets = 20
+yards_prior_receptions = 20
+cutoff_hours = 24
+interval_level = 0.8
+minimum_calibration = 100
+tier_edges = [3, 6]
+minimum_outcome_coverage = 0.8
+maximum_rmse_ratio = 1.0
+maximum_position_rmse_ratio = 1.05
+maximum_mae_ratio = 1.05
+interval_coverage_low = 0.7
+interval_coverage_high = 0.9
+
+[team_aliases]
+OAK = "LV"
+LAR = "LA"
