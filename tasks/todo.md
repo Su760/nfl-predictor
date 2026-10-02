@@ -713,6 +713,21 @@ Prior unrelated ledger edits remain unstaged.
       baseline/cutoff coverage; implement the prospective T60 baseline selection.
 - [x] Run focused publication, QB availability and collector tests; verify frozen
       contracts and original archives remain unchanged; update runbook.
-- [ ] Review/stage only related changes, commit and normally push V2; verify remote.
-- [ ] Safely activate the committed code through the existing LaunchAgent; verify
+- [x] Review/stage only related changes, commit and normally push V2; verify remote.
+- [x] Safely activate the committed code through the existing LaunchAgent; verify
       one worker, current health and next prospective collection opportunity.
+
+Activation checkpoint October 2 17:21 CDT: code fix `47b0558` normally pushed
+and remote SHA verified. Existing LaunchAgent safely restarted between cycles
+from PID57687 to PID39405, exactly one worker, healthy heartbeat/dashboard,
+active caffeinate assertion. Last successful source cycle remains 17:07:27 CDT;
+next scheduled is 19:07:27 CDT. The new process has no inherited module cache,
+but corrected shadow execution is NOT yet verified in the daemon: it imports
+that module lazily at its first scheduled source cycle. No source cycle was
+forced and no collection window was awaited. At 19:10, check the normal cycle's
+archived `season_shadow.py` hash against the committed hash; on October4 at
+07:45, verify IND–WAS T60 exact pairing from original receipts.
+Validation: 98 focused tests passed; Ruff/diff checks passed; strict mypy retains
+569 inherited diagnostics (HEAD571), zero new normalized diagnostics. Before
+activation, all87311 original archive/policy/forecast files matched their SHA-256
+manifest. Unrelated working-tree changes remain outside both task commits.

@@ -1195,3 +1195,22 @@ original source timestamps/IDs and expected-QB availability. Report calibration
 separately. Verify the shadow source-version contains the committed corrected
 `season_shadow.py` hash; report explicit source/availability or delivery exclusions.
 Do not wait for this window or alter PIT–CLE records.
+
+### Activation checkpoint — October 2, 17:21 CDT
+
+Fix commit `47b0558e486bc1010e33895764140b946dff7508` was normally pushed to
+`codex/nfl-predictor-v2`, with the remote SHA verified. The existing LaunchAgent
+was restarted between cycles, after checking the worker lock was free and no
+scheduled source cycle was imminent. It now has one healthy worker, PID 39405,
+from the relocated V2 path; dashboard health and the caffeinate idle-sleep
+assertion passed. The latest successful source cycle remains 17:07:27.499642
+CDT, before activation; next refresh is 19:07:27.499642.
+
+Committed code is verified by focused tests. The restarted daemon has no old
+module cache, but it loads `season_shadow.py` lazily during a source cycle;
+execution of the correction in that daemon is **not yet verified**. No source
+cycle was forced. At 19:10 CDT, read the new normal-cycle view and its shadow
+source-version archive; require its `ops/season_shadow.py` SHA-256 to equal
+`git show 47b0558:ops/season_shadow.py` hashed as bytes. A restart heartbeat
+alone does not establish that module execution. The October 4 07:45 check
+above remains the first real T60 verification opportunity.
