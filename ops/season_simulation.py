@@ -372,21 +372,31 @@ def simulate(view: dict, cfg: dict) -> dict:
     return metadata
 
 
-def snapshot(view, root, config_path="configs/season_simulation.toml"):
-    """Reuse unchanged evidence; atomically preserve every new simulation snapshot."""
+def evidence_signature(view, cfg):
+    """Cheap shared freshness identity; does not run draws or write artifacts."""
     from season_live import material
-    from week1_live import write_once
 
-    cfg = tomllib.loads(Path(config_path).read_text())
-    signature = digest({
+    return digest({
         "config": cfg,
         "history": view["sources"]["nflverse_history"]["raw_sha256"],
         "source": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "elo_source": hashlib.sha256(
+            (Path(__file__).resolve().parents[1] / "src/nfl_predictor/ratings/elo.py").read_bytes()
+        ).hexdigest(),
         "model": view["model"]["model_state_sha256"],
         "games": [{k: g.get(k) for k in
-                   ("game_id", "kickoff", "schedule_version", "status", "outcomes")}
+                   ("game_id", "home", "away", "neutral_site", "kickoff",
+                    "schedule_version", "status", "outcomes")}
                   | {"inputs": material(g.get("inputs", {}))} for g in view["games"]],
     })
+
+
+def snapshot(view, root, config_path="configs/season_simulation.toml"):
+    """Reuse unchanged evidence; atomically preserve every new simulation snapshot."""
+    from week1_live import write_once
+
+    cfg = tomllib.loads(Path(config_path).read_text())
+    signature = evidence_signature(view, cfg)
     index = root / "simulation-index" / (signature + ".json")
     if index.exists():
         reference = json.loads(index.read_text())

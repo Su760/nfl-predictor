@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Playoff Picture · NFL forecasts</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/playoffs.css" />
+    <script defer src="/playoffs.js"></script>
+  </head>
+  <body>
+    <header>
+      <a class="brand" href="/">NFL forecasts<span>2026 season</span></a>
+      <nav aria-label="Main navigation">
+        <a href="/">Games</a><a href="/rankings">Rankings</a>
+        <a href="/playoffs" aria-current="page">Playoff Picture</a>
+        <a href="/performance">Performance</a
+        ><button id="refresh" type="button">Reload saved data</button>
+      </nav>
+    </header>
+    <main id="playoffs" aria-live="polite">
+      <p class="loading">Loading saved playoff picture…</p>
+    </main>
+    <footer>
+      All times Central. Standalone simulations use saved evidence. Local
+      automation requires this Mac awake and connected.
+    </footer>
+  </body>
+</html>

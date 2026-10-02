@@ -1,5 +1,6 @@
 """Loopback-only viewer exposing summaries, never raw data or a filesystem browser."""
 
+import argparse
 import json
 import re
 from datetime import UTC, datetime
@@ -16,6 +17,9 @@ def static_response(path):
     assets = {"/": ("index.html", "text/html; charset=utf-8"),
               "/performance": ("index.html", "text/html; charset=utf-8"),
               "/rankings": ("index.html", "text/html; charset=utf-8"),
+              "/playoffs": ("playoffs.html", "text/html; charset=utf-8"),
+              "/playoffs.js": ("playoffs.js", "text/javascript; charset=utf-8"),
+              "/playoffs.css": ("playoffs.css", "text/css; charset=utf-8"),
               "/insights.js": ("insights.js", "text/javascript; charset=utf-8"),
               "/app.js": ("app.js", "text/javascript; charset=utf-8"),
               "/styles.css": ("styles.css", "text/css; charset=utf-8")}
@@ -24,7 +28,12 @@ def static_response(path):
     if path not in assets:
         return None
     name, kind = assets[path]
-    return (ASSETS / name).read_bytes(), kind, 200
+    body = (ASSETS / name).read_bytes()
+    if name == "index.html":
+        # Navigation appears only in a process that also loaded the new route.
+        body = body.replace(b'<a href="/performance">',
+                            b'<a href="/playoffs">Playoff Picture</a><a href="/performance">', 1)
+    return body, kind, 200
 
 
 def operational_status(data, worker, cfg, clock):
@@ -48,6 +57,10 @@ def main():
     from week1_live import configuration
 
     cfg, root = configuration()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=int, default=cfg["port"], help="Loopback preview port")
+    args, _ = parser.parse_known_args()
+    cfg = {**cfg, "port": args.port}
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -56,6 +69,10 @@ def main():
                 content, kind, code = asset
             elif self.path == "/health":
                 content, kind, code = b'{"status":"ok"}', "application/json", 200
+            elif self.path == "/api/playoffs":
+                from season_playoffs import picture
+
+                content, kind, code = json.dumps(picture(), allow_nan=False).encode(), "application/json", 200
             elif self.path == "/api/insights":
                 try:
                     from season_insights import configuration as insights_configuration

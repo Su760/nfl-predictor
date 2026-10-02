@@ -731,3 +731,47 @@ Validation: 98 focused tests passed; Ruff/diff checks passed; strict mypy retain
 569 inherited diagnostics (HEAD571), zero new normalized diagnostics. Before
 activation, all87311 original archive/policy/forecast files matched their SHA-256
 manifest. Unrelated working-tree changes remain outside both task commits.
+
+## Playoff Picture milestone — October 2, 2026
+
+Authority: user approved this bounded implementation, standalone simulation refresh,
+independent rules review, selective commit and normal push. No merge/deployment.
+
+- [x] Verify saved artifact against current schedule, 49 results, history and model; preserve checkpoints.
+- [x] Share existing simulator evidence signature; add read-only saved-artifact endpoint with freshness/integrity states.
+  Add navigation in the loaded viewer server, so the existing process cannot expose an unavailable new route.
+- [x] Add discoverable Playoff Picture page: all teams, current records, five probabilities, AFC/NFC filters and sorting.
+- [x] Time the unchanged 2,000-draw standalone refresh; publish exact blocked reason if any, preserving all guards and draws.
+- [x] Verify focused rules/totals/freshness tests and desktop/mobile UI; independent rules review.
+- [x] Correct refresh runbook and record later roadmap.
+- [ ] Selectively commit/push and verify remote SHA.
+
+Design: reuse viewer slate (#142d4e), blue (#175cd3), teal (#087f8c),
+muted (#53657b), pale background (#f3f6fa) and amber (#985006). Existing
+system type with tabular probability figures; left-aligned title/status,
+full-width sortable table and a Super Bowl distribution strip. Mobile uses
+controlled horizontal table scrolling with a sticky team column. Favorite
+comes from the entire saved distribution, not the selected conference.
+
+Keep simulation_enabled=false; no worker/service changes, source cycles, refit,
+forecast rewrite or promotion. Oct2 19:10 code execution verification and
+Oct4 07:45 IND–WAS T60 receipt check remain separate pending checkpoints.
+
+Verification: all 41 focused simulator/Playoff/viewer tests pass; changed-file
+Ruff and JS syntax checks pass. Independent rules review found no blocker.
+Standalone refresh ca2ea4aa0d964ce02128775edf87a61c624097d4f57d3fc05fa96b20fba5c3fb
+completed all 2,000 draws in 4.50s against Oct2 17:07:27 CDT evidence, preserving
+49 finals. All six older artifacts are unchanged. Buffalo leads Super Bowl
+win probability at 17.7%; totals 14/8/2/2/1 and conference/division sums validate.
+
+Preview http://127.0.0.1:8511/playoffs verified at desktop 1280px and mobile 375px:
+32 teams, 16 per conference, working sorts, favorite preserved through filters,
+sticky team column, table-only horizontal scroll and no console errors.
+The first browser assertions ran before the async request completed; final
+checks waited for the rendered table and passed. Screenshots saved privately
+at /tmp/nfl-playoffs-desktop.png and /tmp/nfl-playoffs-mobile.png.
+
+Production viewer 8510 and forecast worker 39405 were not restarted. Navigation
+is inserted only by the new viewer code, keeping the old running viewer's
+routes coherent. No inline simulation, model/policy, shadow/forecast or service
+changes. Pending Oct2 19:10 execution and Oct4 07:45 receipts remain intact.

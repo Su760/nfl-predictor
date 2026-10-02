@@ -1,0 +1,180 @@
+/* Keep the season viewer's type and palette; probability widths carry information. */
+.playoff-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+}
+.playoff-status {
+  font-weight: 700;
+  padding: 6px 12px;
+  background: #e8f5ef;
+  color: #166345;
+  border-radius: 4px;
+}
+.playoff-status.warning {
+  background: #fff3df;
+  color: #874904;
+}
+.playoff-meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+  padding: 18px 0;
+  border-block: 1px solid var(--line);
+  margin: 24px 0;
+}
+.playoff-meta dt {
+  font-size: 13px;
+  color: var(--muted);
+}
+.playoff-meta dd {
+  margin: 4px 0 0;
+  font-weight: 650;
+}
+.playoff-favorite {
+  font-size: 20px;
+  margin-top: 24px;
+}
+.playoff-distribution {
+  display: flex;
+  height: 22px;
+  gap: 2px;
+  margin: 14px 0;
+  overflow: hidden;
+  border-radius: 4px;
+  background: var(--line);
+}
+.playoff-distribution span {
+  background: var(--blue);
+  min-width: 0;
+}
+.playoff-distribution span:nth-child(even) {
+  background: var(--teal);
+}
+.playoff-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 16px;
+  margin: 28px 0 14px;
+}
+.playoff-controls label {
+  display: grid;
+  gap: 5px;
+  font-size: 14px;
+}
+.playoff-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+}
+.playoff-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.playoff-table th,
+.playoff-table td {
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--line);
+  text-align: right;
+}
+.playoff-table thead th {
+  font-size: 13px;
+  background: #eef3f9;
+}
+.playoff-table th:first-child {
+  text-align: left;
+  position: sticky;
+  left: 0;
+  background: white;
+  z-index: 1;
+  max-width: 240px;
+}
+.playoff-table thead th:first-child {
+  background: #eef3f9;
+  z-index: 2;
+}
+.playoff-table th small {
+  display: block;
+  font-weight: 400;
+}
+.playoff-table tr:last-child > * {
+  border-bottom: 0;
+}
+.playoff-table .favorite-row th {
+  border-left: 4px solid var(--teal);
+  padding-left: 12px;
+}
+.probability-cell {
+  background: linear-gradient(
+    to right,
+    #eef5fd var(--probability),
+    transparent var(--probability)
+  );
+}
+.playoff-table caption {
+  text-align: left;
+  padding: 14px 16px;
+  color: var(--muted);
+  font-size: 14px;
+  caption-side: bottom;
+  white-space: normal;
+}
+.playoff-assumptions {
+  margin-top: 30px;
+}
+.playoff-assumptions ul {
+  padding-left: 24px;
+  max-width: 85ch;
+}
+.playoff-assumptions li {
+  margin: 8px 0;
+}
+.playoff-provenance {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+.playoff-error {
+  overflow-wrap: anywhere;
+}
+@media (max-width: 760px) {
+  header {
+    flex-direction: column;
+    align-items: start;
+    padding: 20px;
+  }
+  nav {
+    flex-wrap: wrap;
+    gap: 14px 20px;
+  }
+  main,
+  footer {
+    padding: 20px;
+  }
+  h1 {
+    font-size: 30px;
+  }
+  .playoff-heading {
+    flex-wrap: wrap;
+  }
+  .playoff-meta {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  .playoff-table th,
+  .playoff-table td {
+    padding: 12px;
+  }
+  .playoff-table th:first-child {
+    max-width: 170px;
+    white-space: normal;
+    min-width: 155px;
+  }
+  .playoff-controls label {
+    flex: 1 1 145px;
+  }
+}
