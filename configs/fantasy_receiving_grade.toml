@@ -1,0 +1,4 @@
+version = 1
+primary_archive = "artifacts/fantasy/receiving/v1/first-prospective.json"
+primary_forecasts = 273
+horizon_edges_hours = [24, 48, 72]

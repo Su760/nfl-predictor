@@ -9,6 +9,7 @@ from fantasy.evaluate import gate, method_hash
 from fantasy.points import fingerprint, settings, summarize_quality
 from fantasy.quality import DEFINITIONS
 from fantasy.receiving_data import saved_sheet
+from fantasy.receiving_grade import latest_personal_outcomes, saved_scorecard
 from fantasy.trends import weekly_trends
 from fantasy.usage import METRICS, WINDOW_NOTE, summarize
 
@@ -72,12 +73,21 @@ def response(path, cfg=None):
     assets = {"/fantasy": ("fantasy.html", "text/html; charset=utf-8"),
               "/fantasy.js": ("fantasy.js", "text/javascript; charset=utf-8"),
               "/receiving.js": ("receiving.js", "text/javascript; charset=utf-8"),
+              "/receiving-grade.js": ("receiving-grade.js", "text/javascript; charset=utf-8"),
               "/fantasy.css": ("fantasy.css", "text/css; charset=utf-8")}
     if parsed.path in assets:
         name, kind = assets[parsed.path]
         return (ROOT / "ops/viewer" / name).read_bytes(), kind, 200
     if parsed.path == "/api/fantasy/receiving":
-        return json.dumps(saved_sheet(cfg or configuration()), allow_nan=False).encode(), "application/json", 200
+        selected = cfg or configuration()
+        sheet = saved_sheet(selected)
+        outcomes = latest_personal_outcomes(selected)
+        if outcomes is not None:
+            sheet["outcomes"] = outcomes
+        return json.dumps(sheet, allow_nan=False).encode(), "application/json", 200
+    if parsed.path == "/api/fantasy/receiving-grade":
+        capture = parse_qs(parsed.query).get("capture", [None])[0]
+        return json.dumps(saved_scorecard(cfg or configuration(), capture), allow_nan=False).encode(), "application/json", 200
     if parsed.path != "/api/fantasy":
         return None
     window = parse_qs(parsed.query).get("window", ["last3"])[0]

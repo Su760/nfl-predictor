@@ -13,6 +13,24 @@
   padding-top: 18px;
   margin-bottom: 28px;
 }
+.receiving-grading {
+  border-top: 3px solid var(--teal);
+  padding-top: 18px;
+  margin: 28px 0;
+}
+#grading-provenance {
+  overflow-wrap: anywhere;
+}
+.receiving-grading select {
+  min-width: 0;
+}
+#grading-table > .table-wrap {
+  max-height: 620px;
+}
+#grading-records td:last-child {
+  white-space: normal;
+  min-width: 240px;
+}
 .receiving > select {
   max-width: 260px;
   margin-bottom: 12px;

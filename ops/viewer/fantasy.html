@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="/fantasy.css" />
     <script defer src="/fantasy.js"></script>
     <script defer src="/receiving.js"></script>
+    <script defer src="/receiving-grade.js"></script>
   </head>
   <body>
     <header class="site-header">
@@ -108,6 +109,60 @@
         </form>
         <p id="prediction-status" role="status" aria-live="polite"></p>
         <div id="prediction-history"></div>
+      </section>
+      <section class="receiving-grading" aria-labelledby="grading-title">
+        <div class="section-heading">
+          <h2 id="grading-title">Prospective receiving scorecard</h2>
+          <button id="grading-reload" type="button">
+            Reload saved scorecard
+          </button>
+        </div>
+        <p class="caption">
+          Primary Week 4 version: the preserved 273 forecasts. Other versions
+          are shown separately, never selected by accuracy. Scoring uses
+          archived model and rolling-average estimates and ranges directly.
+        </p>
+        <p id="grading-status" role="status" aria-live="polite">
+          Loading scorecard…
+        </p>
+        <div class="compare-controls">
+          <div>
+            <label for="grading-capture"
+              >Outcome capture / source revision</label
+            ><select id="grading-capture"></select>
+          </div>
+          <div>
+            <label for="grading-version">Forecast version</label
+            ><select id="grading-version"></select>
+          </div>
+        </div>
+        <p id="grading-coverage"></p>
+        <p class="caption">
+          Errors use identical numeric outcome rows for model and rolling
+          baseline. Range coverage uses supported ranges on that population.
+          Bias is prediction minus actual. Pending, missing
+          (DNP/no-stat/unknown), invalid outcomes and unavailable forecast pairs
+          are excluded. Numeric zero counts as observed. Missing ranges stay
+          unavailable; interval denominators are shown separately.
+        </p>
+        <div id="grading-table"></div>
+        <details>
+          <summary>Outcome receipts and version history</summary>
+          <div id="grading-provenance"></div>
+        </details>
+        <details>
+          <summary>Player-game outcomes and exclusions</summary>
+          <div id="grading-records"></div>
+        </details>
+        <p class="caption">
+          Reload reads saved files only. Outcome refresh and grading run
+          independently with
+          <code
+            >.venv-fantasy/bin/python -m fantasy.receiving_grade --week 4
+            --refresh-outcomes</code
+          >. Grading remains incomplete until outcomes are supported; it does
+          not refit either frozen experiment.
+        </p>
       </section>
       <section aria-label="Usage filters" class="controls">
         <div>

@@ -1,4 +1,4 @@
-# Player Lab runbook — milestones 1–4
+# Player Lab runbook — milestones 1–5
 
 Local preview: <http://127.0.0.1:8520/fantasy>, branch `codex/fantasy-player-lab`.
 Historical WR/RB/TE usage only: targets, carries, receiving air yards, target/carry/snap
@@ -9,6 +9,41 @@ ESPN sync, rankings, trades, chat and
 sports betting remain deferred. The September 30 closeout authorizes a selective
 milestone commit and normal push to `origin/codex/fantasy-player-lab`. No merge or
 deployment is authorized; the worktree and its unrelated edits are preserved.
+
+## Milestone 5 — prospective receiving grading
+
+The separate scorecard below projections grades immutable model/rolling estimates and
+saved ranges. The preserved first-prospective archive's 273 Week 4 rows are always
+primary; other versions are shown separately without retrospective selection. No new
+predictions, fitting, historical evaluation or gate changes are performed.
+
+```sh
+cd ~/Desktop/nfl-fantasy
+.venv-fantasy/bin/python -m fantasy.receiving_grade --week 4 --refresh-outcomes
+```
+
+Run on **October 6**, after the Monday game/provider update. Independent player/schedule
+refresh works without future games. Immutable outcome captures, receipt hashes,
+correction revisions and scorecards live in ignored `.fantasy-cache/receiving/grading/`.
+UI reload reads saved captures only; selectors retain earlier results and separate
+forecast versions. Personal browser-local calls are preserved and receive refreshed
+outcomes through stable player/game IDs.
+
+Paired MAE/RMSE/bias, range coverage/width and observed/missing/invalid/pending counts
+are shown by position, prior usage tier and disjoint forecast horizons. Missing ranges
+have separate denominators. Numeric zero is observed; unsupported values stay
+unavailable. Missing final-game rows mean DNP/no-stat/unknown, not confirmed DNPs.
+Completion requires prior Eastern calendar date and numeric scores. All three valid
+receiving components and both estimates are required for paired errors. Incomplete
+coverage remains prominently labeled even after kickoff.
+
+Initial outcome retrieval **October 2 23:38:22.009 UTC**: **0/273 observed, 273 pending**;
+errors and coverage are unavailable. Source modification/publication timing is distinct
+from retrieval. [Exact definitions, receipts and command](fantasy-receiving.md#prospective-grading-command-and-saved-scorecard).
+107 focused Python checks, lint/syntax and grading desktop/mobile checks pass; original
+projection/storage checks also pass. Frozen artifacts and method compatibility remain
+unchanged. Next bounded task: capture Week 4 outcomes October 6, audit coverage and
+corrections, and report paired results or remaining publication gaps without refitting.
 
 ## Milestone 4 — weekly receiving projections (experimental)
 
@@ -44,9 +79,9 @@ totals/per-game counts; shares retain summed denominators and missing coverage s
 
 Validation: 92 focused Python checks, lint/syntax, new desktop/mobile projection/storage
 checks, and existing fantasy UI checks. The frozen expected-points model/artifact bytes
-and compatibility remain unchanged. Next bounded task: **grade first Week 4 prospective
-forecasts on October 6 after numeric outcomes arrive**, by position/tier/horizon with
-missing coverage and all versions preserved. No automated tuning, TD/full-point forecasts,
+and compatibility remain unchanged. The prospective grading command in milestone 5
+now implements the October 6 checkpoint, by position/tier/horizon with missing coverage
+and all versions preserved. No automated tuning, TD/full-point forecasts,
 ESPN sync, rankings, trade advice, routes or betting.
 
 ## Frozen experiment preservation — October 1, 2026

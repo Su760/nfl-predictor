@@ -224,6 +224,41 @@ muted (#516276), system sans. Separate future sheet above past usage, compact ro
 and wide scrollable table on mobile; game/cutoff/sample assumptions sit beside numbers.
 No fantasy-point/TD forecasts, injuries inferred from absence, routes, sync or trade advice.
 
+### Prospective receiving grading — approved bounded implementation
+
+Scope: new `fantasy/receiving_grade.py`, `configs/fantasy_receiving_grade.toml`,
+`tests/test_fantasy_receiving_grade.py`, `tests/fantasy_receiving_grade_ui.cjs`,
+`ops/viewer/receiving-grade.js`; `fantasy/server.py`, `ops/week1_viewer.py` allowlists,
+`ops/viewer/fantasy.html`, `ops/viewer/fantasy.css`, `ops/viewer/receiving.js` outcome wiring,
+this fantasy ledger and existing fantasy runbooks. No edit to any receiving method-hashed
+file/config, frozen model/evaluation, forecast archive or browser prediction storage.
+Keep all 23 unrelated formatting edits and NFL runtime unchanged. No forecast generation,
+model refit or historical experiment rerun. User explicitly authorizes commit/normal push.
+
+- [x] Implement independent outcome refresh with immutable source/correction captures;
+      stable ID/game matching, final-game guard, numeric zero vs missing/invalid.
+- [x] Grade only saved model/rolling estimates and intervals; first-prospective.json
+      (273 rows) is primary Week 4; separate other versions and retain exclusions.
+- [x] Save immutable scorecards with paired errors/range coverage by position, pre-cutoff
+      tier and horizon; expose incomplete results and correction history in the UI.
+- [x] Validate fixture math, pending/zero/invalid/duplicate/correction/no-future cases,
+      UI desktop/mobile and untouched artifacts; run a pending real-data capture only.
+- [x] Update runbook/exact October 6 command; stage only grading changes for the
+      authorized normal commit/push and remote verification at closeout.
+
+Design: separate prospective scorecard below projections, default primary selected.
+Coverage and incomplete grading are prominent; no ranking of versions by accuracy.
+Horizon grouping is explicit from archived kickoff minus cutoff (not outcome timing).
+All three outcome components are required for a paired score; missing/DNP status unknown.
+Latest correction is shown with prior captures preserved; no model recalibration.
+
+Initial live capture 2026-10-02T23:38:22.009Z: primary 273 pending, zero observed;
+errors/range coverage unavailable. 107 focused Python checks and grading desktop/mobile
+UI checks passed; existing receiving projection/storage checks passed. Both frozen
+experiments and forecast bytes match pre-edit hashes. Next: October 6 independent
+outcome capture and coverage audit using `python -m fantasy.receiving_grade --week 4
+--refresh-outcomes`; no new predictions or model changes.
+
 Authority: current user request explicitly authorizes implementation, free source access,
 local automation, and coherent verified commits/pushes to codex/nfl-predictor-v2.
 Betting work deferred. Main checkout user edits remain untouched. Private data outside Git.

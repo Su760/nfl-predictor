@@ -169,6 +169,85 @@ selecting the best retrospectively; identify a primary first version before scor
 Archive input/outcome receipt hashes and corrections. Do not refit or promote based on
 this single week. If outcomes are not published, defer grading and report the gap.
 
+## Prospective grading command and saved scorecard
+
+On October 6, after the Monday game and provider update, run exactly:
+
+```sh
+cd ~/Desktop/nfl-fantasy
+.venv-fantasy/bin/python -m fantasy.receiving_grade --week 4 --refresh-outcomes
+```
+
+This separate command fetches only player stats and the schedule into its own grading
+input cache. It does not call forecast generation, model fitting, interval calibration
+or either historical experiment. It works even when there are no future games left.
+Without `--refresh-outcomes`, it grades against the latest already-captured outcomes.
+`--week 4` asserts the preserved primary's week, rather than selecting a new population.
+No new acceptance gates, historical refit or promotion are introduced by grading.
+
+The checksum-verified `artifacts/fantasy/receiving/v1/first-prospective.json` is always
+the primary **273-player-game** population. Other local Week 4 archives are separate
+versions, never selected by accuracy. Identical archive copies are deduplicated and
+their locations retained. Invalid archives are listed separately; invalid primary
+integrity fails closed. Saved points and both sets of ranges are read directly, with
+no recalculation using actual volume, outcomes or later rosters.
+
+Stable player/game IDs match outcomes. Schedule/team contradictions, duplicate rows,
+nonfinite/missing components, negative or fractional counts and catches above targets
+are invalid; negative receiving yards are valid. All three numeric outcome components
+and both saved point estimates are required for the paired error population. An explicit
+numeric zero is observed. A missing row after completion is **DNP/no-stat/unknown**,
+excluded with no invented zero or inactive designation. Completion conservatively
+requires numeric schedule scores and a game on an earlier Eastern calendar day; live
+or same-day games remain pending even if scores exist. Missing schedule evidence also
+remains pending. Grading is incomplete unless every primary forecast has a supported
+paired outcome; missing/invalid rows remain visible even after all games finish.
+
+MAE, RMSE and signed bias (estimate minus actual) use identical paired rows for model
+and rolling baseline. Report overall, position, archived prior usage tier, forecast
+horizon, position×tier and position×horizon. Frozen tiers are low <3, medium 3–<6,
+high ≥6 prior rolling targets. Horizon is captured kickoff minus archived input cutoff:
+0–<24, 24–<48, 48–<72 and ≥72 hours. These disjoint bins were fixed in the separate
+grading config before observing prospective outcomes. Interval coverage is inclusive
+of bounds; width is the mean saved high minus low. Missing/invalid ranges do not
+contribute: interval n and unavailable-range counts are reported separately for each
+model/metric. No observed rows means unavailable errors/coverage/width, not zero.
+
+Immutable normalized outcomes are saved under `.fantasy-cache/receiving/grading/outcomes/`
+and immutable scorecards under `scorecards/`, with exclusive timestamp/hash filenames.
+Raw inputs and timestamped source receipts are under `grading/inputs/`; hashes in each
+capture identify their exact bytes. Each capture links its predecessor, increments
+capture sequence, and increments source revision only when source bytes change.
+Repeated runs preserve earlier results, including later corrections; latest pointers
+only choose the current view. Scorecards retain the grader/policy hash and outcome
+capture hash. All source data and scorecards remain local and excluded from Git.
+
+The separate **Prospective receiving scorecard** view at
+<http://127.0.0.1:8520/fantasy> reads `/api/fantasy/receiving-grade` only. It defaults to
+the primary version and exposes earlier scorecard captures, other forecast versions,
+receipts, exclusions and stale/incomplete states. Reload never fetches outcomes or
+generates forecasts. The existing personal-call view consumes independently refreshed
+numeric outcomes by the same IDs; browser-local calls and their versions are unchanged.
+Integrity failure clears unsupported outcomes rather than silently showing older values.
+
+Initial real capture: **2026-10-02 23:38:22.009 UTC**, sequence/revision **1/1**.
+Primary: **0 observed, 273 pending, 0 missing, 0 invalid**, so all errors/range coverage
+are unavailable. There is one distinct forecast version, with the preserved bundle and
+identical local copy. Player stats retrieved **23:38:21.237 UTC**, HTTP Last-Modified
+**October 2 15:48:18 UTC**; schedule retrieved **23:38:22.008 UTC**, modification time
+unavailable. Retrieval is not source publication time. Source hashes:
+
+- Players: `ad728d131967bcd78d6e6a23b205a65db0bbb6f12bb7497eb15e70f36ebf1f85`.
+- Schedule: `0d1fc615d6148c1e199469836b1f8ef241df9188fea71eb5b1ba8c9a25f5aad6`.
+
+Fixtures and browser checks cover paired arithmetic, missing/zero/invalid outcomes,
+duplicates, same-day completion guards, source corrections, checksum rejection,
+no-future-game refresh, read-only APIs, separate versions and desktop/mobile scrolling.
+The existing projection/personal-call UI checks still pass. Both frozen experiments,
+the four method-hashed receiving files, existing predictions and 23 unrelated edits
+are unchanged. Next bounded task is the October 6 capture and completeness audit;
+repeat outcome capture later if publication gaps remain, without generating new calls.
+
 ## Verification boundary
 
 92 focused Python checks passed (receiving math/time/leakage/identity/archives, original
