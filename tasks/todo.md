@@ -783,3 +783,47 @@ for the 17:07 source snapshot. Exactly one healthy forecast worker, PID 39405,
 next normal refresh 19:07:27 CDT; production dashboard 8510 health is OK.
 No worker or production viewer activation occurred. Oct2 19:10 and
 Oct4 07:45 verification checkpoints remain pending, without waiting.
+
+## Playoff Picture activation and loaded-code check — October 2, 2026
+
+Authority: user explicitly authorizes existing viewer 8510 activation, read-only
+normal-cycle execution check, one standalone simulation refresh if stale, and
+selective documentation commit/push. No worker/fantasy 8520 changes.
+Edit scope: appended evidence in docs/runbooks/season-live.md,
+docs/runbooks/season-simulation.md and this new tasks/todo.md section only.
+
+- [x] Inspect actual time and latest completed normal cycle; verify linked archived shadow code against 47b0558.
+- [x] Activate committed viewer through its existing LaunchAgent; verify 8510 endpoints/navigation/all-team states.
+- [x] Refresh stale simulation once standalone, retaining all draws/guards; preserve one worker and fantasy process; verify health or record pending state.
+- [ ] Record activation/execution evidence, commit only related documentation, normally push and verify remote.
+
+Keep October 4 07:45 CDT IND–WAS T60 receipt check pending. No source cycle
+forced, no waiting for a future cycle/window, no merge/refit/forecast rewrite.
+
+Completed-cycle evidence: October 2 19:08:12 CDT; hash-valid source archive
+528f7298d2d19a619bb1d5b6bef6c1e605a57fef7bc223672631aa4d8933e02f
+contains season_shadow.py SHA-256
+0c78fdaaa4eda1a8c9aaeb0794b3b3bf17049016c220b707c4c11b6db3188a0a,
+matching git 47b0558. Linked calibration/QB improvement records verify execution;
+heartbeat alone was not used. Existing viewer LaunchAgent restarted only 8510,
+PID 56390→92740; worker 39405 and fantasy 8520 PID 27059 unchanged. All four routes
+return 200; browser 32-team rendering, 16-team filters, sorting/reload pass.
+
+One standalone refresh: COMPLETE 69f400120ab840adc462927b91e89dffc8cbf21996957ec8ce8ea5da9da9d3e0,
+2,000 draws in 4.74s, 49 finals, cutoff 19:08:12 CDT. COMPLETE/FRESH at 19:15:23,
+totals 14/8/2/2/1; all seven prior artifacts preserved. No inline simulations,
+worker schedule/model/policy changes, forced source cycle or waiting.
+URL http://127.0.0.1:8510/playoffs. October 4 07:45 T60 check remains pending.
+
+Later 19:15 source cycle remains pending at 19:17–19:19; exactly one worker
+PID 39405 holds the lock, but its 14:01 heartbeat yields derived STALE/OFFLINE.
+No current-health success claim, worker restart, forced cycle or extra refresh.
+Read fresh heartbeat/last-success/next-run after natural completion.
+
+Subsequent normal cycle completed naturally 19:20:15 CDT. At 19:21:48,
+worker 39405 HEALTHY/source FRESH/no overdue run, next 21:20:15 CDT; linked
+archived corrected source hash verified again. The complete 19:08 simulation
+is now STALE against changed material inputs from 19:20; page shows the
+exact evidence-mismatch reason and retains all 32 dated probabilities.
+Only the one authorized standalone refresh was performed. No second refresh,
+worker restart or source-cycle force. October 4 07:45 receipt check pending.

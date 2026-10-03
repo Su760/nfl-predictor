@@ -1214,3 +1214,117 @@ source-version archive; require its `ops/season_shadow.py` SHA-256 to equal
 `git show 47b0558:ops/season_shadow.py` hashed as bytes. A restart heartbeat
 alone does not establish that module execution. The October 4 07:45 check
 above remains the first real T60 verification opportunity.
+
+## Playoff Picture viewer activation and execution evidence — October 2, 2026
+
+User explicitly authorized local viewer 8510 activation and the pending normal-cycle
+execution check. At **October 2 19:11:52 CDT**, the latest successful normal
+source cycle was **19:08:12.862961 CDT** (`2026-10-03T00:08:12.862961Z`),
+after worker activation. No source cycle was forced or future window awaited.
+
+### Corrected shadow execution verified
+
+The completed view's shadow report `e02d68bedc9c8723b27d1c30e6e7afe5a8f3dad6d9b63c22c344ca4890915deb` links its model
+observations to the immutable source version
+`528f7298d2d19a619bb1d5b6bef6c1e605a57fef7bc223672631aa4d8933e02f`.
+Both linked observations were checked:
+
+- Calibration improvement: `f524bcfd677667316e4d4af31cb2b9a5b54e8374aecf3fe8408ec86f055a6462`.
+- QB improvement: `be63316501f56bd5606e734a1abc3e3228b420c6328b3babed9348d363ccd3d6`.
+
+Each observation/source-version file's SHA-256 equals its content-addressed
+filename. The archive's saved `ops/season_shadow.py` bytes and recorded hash
+both equal SHA-256 of `git show 47b0558e486bc1010e33895764140b946dff7508:ops/season_shadow.py`:
+
+`0c78fdaaa4eda1a8c9aaeb0794b3b3bf17049016c220b707c4c11b6db3188a0a`
+
+This is evidence from a **completed normal shadow/source cycle**, not a healthy
+heartbeat alone. Worker PID 39405 started after correction and before this
+cycle; no inherited module cache survives that earlier restart. The October 2
+19:10 loaded-code check is now satisfied. This does **not** prove a new eligible
+T60 pair: the October 4 collection receipt check remains pending.
+
+### Existing viewer activated, other services preserved
+
+Existing service `gui/501/com.su760.nfl-week1-viewer` uses the V2 `.venv/bin/python`
+and `ops/week1_viewer.py`, with working directory
+`/Users/supashramesha/Desktop/nfl-predictor-v2`. Backend and new Playoff assets
+were byte-checked against committed feature HEAD `be1b843` before activation.
+Only this viewer was restarted with:
+
+```bash
+launchctl kickstart -k gui/501/com.su760.nfl-week1-viewer
+```
+
+Viewer PID 56390 became **92740**, and the same existing LaunchAgent is running
+from the relocated V2 path. Its plist was not changed. Forecast worker
+**39405** and caffeinate child 39406 remained; fantasy 8520 listener **27059**
+was not restarted or touched. Unrelated working-tree edits were retained.
+No model, policy, shadow record, forecast, worker schedule or collection setup
+was edited. `simulation_enabled=false` remains unchanged.
+
+All requested 8510 routes returned **HTTP 200**: `/health`, `/api/season`,
+`/playoffs`, `/api/playoffs`. Main navigation exposes Playoff Picture. Browser
+checks on 8510 confirmed 32 team rows and seven columns, 16 teams per AFC/NFC,
+sorting, full-distribution favorite retention, and read-only saved-data reload
+that preserves the selected filter. No browser console errors.
+
+Working URL: **http://127.0.0.1:8510/playoffs**. This is the activated local
+viewer; no branch merge or remote deployment occurred.
+
+### One standalone refresh, all guards retained
+
+The old `ca2ea4aa...` artifact was STALE against the 19:08 cycle, including a
+changed captured history hash. The authorized standalone command ran **once**,
+outside the worker:
+
+```bash
+.venv/bin/python ops/season_simulation.py --config configs/season_simulation.toml
+```
+
+Result: **COMPLETE**, all **2,000 draws**, **4.74 seconds wall time**, **49 final
+games preserved**, against cutoff **October 2 19:08:12.862961 CDT**. New artifact:
+
+`69f400120ab840adc462927b91e89dffc8cbf21996957ec8ce8ea5da9da9d3e0`
+
+At **19:15:23 CDT**, `/api/playoffs` reported COMPLETE, fresh evidence and FRESH
+source state, with 32 teams. Totals validated 14 playoff qualifiers, eight division
+winners, two first seeds, two conference champions and one Super Bowl winner;
+conference/division sums and draw-count checks also passed. The favorite remains
+Buffalo at **17.7% Super Bowl win**. All seven prior simulation files remained
+byte-identical. No draws were dropped and no tiebreak/cutoff/final-result rules
+were relaxed. Strength sensitivity remains uncalibrated; Monte Carlo error
+describes sampling noise, not model accuracy. Later material evidence can make
+this dated artifact stale; do not describe the checkpoint as permanently live.
+
+### Next required checkpoint remains pending
+
+**October 4 07:45 CDT**, read the original IND–WAS T60 receipts after the
+**07:20–07:40 CDT** window (target 07:30; kickoff 08:30). Check exact official/QB
+baseline revision equality, durable publication within cutoff, three prior games
+per team, source timestamps/IDs and expected-QB availability. Report calibration
+separately and any explicit exclusions. Verify corrected shadow source hash.
+No backfill, guessed starters, worker restart or wait for the window is authorized
+by this activation check.
+
+During 19:17–19:19 CDT, the subsequent 19:15 source cycle held worker.lock
+and its 14:01 heartbeat exceeded the viewer's 2×poll threshold, so derived
+health was STALE/OFFLINE. This was reported as pending, not healthy.
+It completed naturally at **19:20:15.468678 CDT**. At **19:21:48 CDT**,
+exactly one forecast worker 39405 is HEALTHY, sources FRESH, no overdue run;
+next scheduled refresh is **21:20:15.468678 CDT**. No source-cycle force,
+worker restart or waiting for a future window was used.
+
+The newer completed view has shadow report `872269878f584a59657a0fde9c1059cb69e4b02287e8b80cac7a1378dbf3cd2d`.
+Its calibration improvement remains `f524bcfd677667316e4d4af31cb2b9a5b54e8374aecf3fe8408ec86f055a6462`;
+QB improvement is `2200901bea6c148fa67dc4b60b6d425058c85c73df9c313770b4249263bcdbdd`.
+Both link to the same hash-verified source archive 528f7298... above; archived
+season_shadow.py still equals the 47b0558 correction. Loaded-code execution
+is verified for this completed normal cycle as well.
+
+The 19:20 cycle changed material inputs, so the saved complete 19:08 simulation
+is now **STALE**. Exact endpoint reason: "Saved evidence differs from current
+results, schedule, inputs, configuration or engine." All 32 teams and the
+dated full distribution remain visible with a stale explanation. Only one
+standalone refresh was authorized/performed in this check; no second refresh
+was used to chase a later cycle. The October 4 07:45 T60 checkpoint stays pending.

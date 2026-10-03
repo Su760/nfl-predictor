@@ -132,10 +132,11 @@ For an isolated local preview without restarting the production viewer:
 # Open http://127.0.0.1:8511/playoffs
 ```
 
-The currently running production viewer must load the new endpoint code
-in a separately authorized activation; this milestone does not restart
-its service, merge or deploy. Reloading its old process does not load Python
-changes. Do not enable inline draws to make Playoff Picture appear.
+At the implementation checkpoint below, the production viewer had not loaded
+new endpoint code. The separately authorized October 2 activation is recorded
+at the end of this runbook; the working local URL is now
+http://127.0.0.1:8510/playoffs. Reloading an old viewer process does not load
+Python changes. Keep inline draws disabled.
 
 ## October 2, 2026 artifact/readiness checkpoint
 
@@ -184,3 +185,51 @@ sorting, sticky team labels, horizontal table scrolling, status/assumptions,
 read-only reload, and absence of browser errors. Independent rules review
 confirms existing postseason reseeding/home/neutral behavior and fail-closed
 tiebreak guards. No historical evaluations or broad test suite are required.
+
+
+## Playoff Picture viewer activation and execution evidence — October 2, 2026
+
+The separately authorized local viewer activation is complete:
+**http://127.0.0.1:8510/playoffs**. Existing LaunchAgent
+`com.su760.nfl-week1-viewer` restarted only the viewer, PID 56390→92740,
+from the relocated V2 worktree. New backend/Playoff assets match committed
+feature code. Forecast worker 39405, fantasy 8520 PID 27059, service configs
+and inline-simulation setting were preserved. No merge/refit/forecast rewrite.
+
+All four requested endpoints returned HTTP 200. Browser checks confirm the
+navigation, 32 teams, AFC/NFC filters (16 each), sorting and read-only reload
+with retained selection; no console errors. The endpoint showed STALE for
+the old artifact before the authorized standalone refresh ran **once**.
+
+Refresh: **COMPLETE**, 2,000 draws, 4.74 seconds wall time, 49 finals preserved,
+cutoff **October 2 19:08:12.862961 CDT**. New immutable artifact:
+
+`69f400120ab840adc462927b91e89dffc8cbf21996957ec8ce8ea5da9da9d3e0`
+
+At 19:15:23 and 19:17:36 CDT, `/api/playoffs` was COMPLETE/FRESH for that
+evidence. Totals 14/8/2/2/1 and conference/division/draw-count checks pass;
+Buffalo remains favorite at 17.7%. All seven prior simulation artifacts stayed
+byte-identical; no draws or tiebreak guards were relaxed.
+
+The pending 19:10 corrected-code check is satisfied by the completed 19:08
+normal cycle's linked, hash-verified shadow source archive. Full provenance
+and activation evidence are in [season-live.md](season-live.md#playoff-picture-viewer-activation-and-execution-evidence--october-2-2026).
+During 19:17–19:19, the later 19:15 cycle held the worker lock and its old
+heartbeat caused derived STALE/OFFLINE health. It completed naturally at
+**19:20:15.468678 CDT**. At **19:21:48 CDT**, the single worker 39405 is HEALTHY,
+sources FRESH and no scheduled run overdue; next refresh is **21:20:15 CDT**.
+No source cycle was forced, worker restarted or future window awaited.
+
+That newer completed cycle changed material inputs. Current simulation state
+is therefore **STALE**, with exact reason: "Saved evidence differs from current
+results, schedule, inputs, configuration or engine." Artifact 69f40012...
+remains a complete 2,000-draw result for 19:08 evidence. Only the one authorized
+standalone refresh was performed; no second refresh was used to chase the
+subsequent cycle. The activated page honestly retains the dated distribution
+and stale explanation. A later standalone refresh should use the latest
+completed healthy view.
+
+**October 4 07:45 CDT IND–WAS T60 receipt check remains pending**, after the
+07:20–07:40 collection window (kickoff 08:30). Do not wait, guess starters or
+backfill. Strength sensitivity is uncalibrated and sampling error is not
+model accuracy. Simulated 0%/100% is not mathematical elimination/clinching.
