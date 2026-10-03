@@ -795,7 +795,7 @@ docs/runbooks/season-simulation.md and this new tasks/todo.md section only.
 - [x] Inspect actual time and latest completed normal cycle; verify linked archived shadow code against 47b0558.
 - [x] Activate committed viewer through its existing LaunchAgent; verify 8510 endpoints/navigation/all-team states.
 - [x] Refresh stale simulation once standalone, retaining all draws/guards; preserve one worker and fantasy process; verify health or record pending state.
-- [ ] Record activation/execution evidence, commit only related documentation, normally push and verify remote.
+- [x] Record activation/execution evidence, commit only related documentation, normally push and verify remote.
 
 Keep October 4 07:45 CDT IND–WAS T60 receipt check pending. No source cycle
 forced, no waiting for a future cycle/window, no merge/refit/forecast rewrite.
@@ -827,3 +827,13 @@ is now STALE against changed material inputs from 19:20; page shows the
 exact evidence-mismatch reason and retains all 32 dated probabilities.
 Only the one authorized standalone refresh was performed. No second refresh,
 worker restart or source-cycle force. October 4 07:45 receipt check pending.
+
+Activation documentation commit 7a12835c9c56e8699ccb382f0959c9a48c4c3bfc
+was normally pushed; remote SHA matched. At 19:25 CDT, exactly one worker
+39405 remains HEALTHY with an 18-second heartbeat age; next 21:20:15 CDT.
+Viewer 8510 PID 92740 and fantasy 8520 PID 27059 listener identities unchanged
+after activation. Worker/model/policy/live/simulation config files equal
+pre-activation committed bytes; all seven prior simulations are preserved.
+Only related documentation was committed. October 4 07:45 T60 receipt check
+remains pending. Current simulation state is STALE for material inputs from
+the naturally completed 19:20 cycle; only one refresh was performed.
