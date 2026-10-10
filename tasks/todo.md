@@ -876,7 +876,7 @@ stay identical. Keep v1/v1.1 declarations/results; no archives were created ther
       reports, commands, exclusions and artifact hashes; report failed gates.
 - [x] Build small responsive experimental sheet, immutable future-only archives,
       read-only descriptive grading and separate timestamped-market evidence.
-- [ ] Verify desktop/mobile and official forecast contracts; review scoped changes,
+- [x] Verify desktop/mobile and official forecast contracts; review scoped changes,
       secret/private-data checks, commit/push only milestone files; verify remote SHA.
 
 Verified before commit: v1.2 exactly reproduces v1 statistics; margin gate PASS
@@ -886,3 +886,7 @@ zero eligible finals. 29 points/viewer and197 official tests pass; fullsuite
 without milestone files. Desktop/mobile/reload/stale/unavailable checked.
 11,457 protected files unchanged; worker793/viewer789 not restarted.
 Evaluation/spec/commands/hashes saved; all private artifacts stay outsideGit.
+
+Source milestone4df209e1df0604fb08aa6eaa3eba3e305ac40386 pushed normally to
+codex/nfl-predictor-v2; direct ls-remote SHA exactly matched local. No merge,
+deploy or production restart. Documentation closeout records this verification.

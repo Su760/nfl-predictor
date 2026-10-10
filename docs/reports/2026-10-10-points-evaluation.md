@@ -187,3 +187,13 @@ Historical input hashes:
 | schedules/season=2023/data.arrow | `c7c84b8910f8b6456e58ec165c2eb17f9803421525792099ffe684bfcefeb1d4` |
 | schedules/season=2024/data.arrow | `4c1a3ce1aae6ec613ce5ba568697b6893886d4b2172e806d82fe161575703ef6` |
 | schedules/season=2025/data.arrow | `773af19fe0da3ba77fe48b6654547bada7b3703d2dc11c067ce95dc4054f2f38` |
+
+## Reviewed source and remote verification
+
+Source milestone `4df209e1df0604fb08aa6eaa3eba3e305ac40386` was pushed normally to
+`origin/codex/nfl-predictor-v2`; direct `git ls-remote --heads` matched the local SHA.
+Only13 reviewed milestone/report/plan files entered that commit. Existing unrelated
+code/config/UI edits and prior uncommitted plan text remain unstaged. No secrets,
+private captures, DBs, raw datasets, model binaries, forecast archives or screenshots
+were committed. This documentation closeout adds only the completed checklist and
+verified source receipt; statistical/artifact hashes remain unchanged.
