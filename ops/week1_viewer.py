@@ -20,6 +20,9 @@ def static_response(path):
               "/playoffs": ("playoffs.html", "text/html; charset=utf-8"),
               "/playoffs.js": ("playoffs.js", "text/javascript; charset=utf-8"),
               "/playoffs.css": ("playoffs.css", "text/css; charset=utf-8"),
+              "/experimental": ("points.html", "text/html; charset=utf-8"),
+              "/points.js": ("points.js", "text/javascript; charset=utf-8"),
+              "/points.css": ("points.css", "text/css; charset=utf-8"),
               "/insights.js": ("insights.js", "text/javascript; charset=utf-8"),
               "/app.js": ("app.js", "text/javascript; charset=utf-8"),
               "/styles.css": ("styles.css", "text/css; charset=utf-8")}
@@ -32,7 +35,7 @@ def static_response(path):
     if name == "index.html":
         # Navigation appears only in a process that also loaded the new route.
         body = body.replace(b'<a href="/performance">',
-                            b'<a href="/playoffs">Playoff Picture</a><a href="/performance">', 1)
+                            b'<a href="/playoffs">Playoff Picture</a><a href="/experimental">Experimental points</a><a href="/performance">', 1)
     return body, kind, 200
 
 
@@ -69,6 +72,10 @@ def main():
                 content, kind, code = asset
             elif self.path == "/health":
                 content, kind, code = b'{"status":"ok"}', "application/json", 200
+            elif self.path == "/api/experimental":
+                from season_points_experiment import sheet
+
+                content, kind, code = json.dumps(sheet(), allow_nan=False).encode(), "application/json", 200
             elif self.path == "/api/playoffs":
                 from season_playoffs import picture
 

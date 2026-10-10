@@ -1,0 +1,62 @@
+.points-note,
+.points-game,
+.points-status {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 20px;
+  margin: 16px 0;
+}
+.points-meta {
+  color: var(--muted);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.points-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+}
+.points-value {
+  font-size: 28px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+  margin: 8px 0;
+}
+.points-alert {
+  color: var(--amber);
+  font-weight: 650;
+}
+.points-game h2 {
+  margin: 0 0 6px;
+  font-size: 21px;
+}
+.points-game h3 {
+  font-size: 16px;
+  margin: 12px 0 0;
+}
+.points-game p {
+  margin: 6px 0;
+}
+.points-game details {
+  margin-top: 12px;
+}
+@media (max-width: 600px) {
+  .points-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  .points-note,
+  .points-game,
+  .points-status {
+    padding: 16px;
+  }
+  header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  nav {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+}

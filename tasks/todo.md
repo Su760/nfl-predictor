@@ -837,3 +837,52 @@ pre-activation committed bytes; all seven prior simulations are preserved.
 Only related documentation was committed. October 4 07:45 T60 receipt check
 remains pending. Current simulation state is STALE for material inputs from
 the naturally completed 19:20 cycle; only one refresh was performed.
+
+## October 10, 2026 — first bounded spread/total experiment
+
+Authority: current user explicitly requests a short plan then execution, reviewed
+milestone commit/push to codex/nfl-predictor-v2. No merge/deploy/production restart.
+The latest execution instruction supersedes an additional planning-only approval.
+Reconciliation complete; do not repeat it. Preserve unrelated edits and fantasy.
+
+Files: configs/season_points.toml; ops/season_points.py (prior-game features/linear
+fit); ops/season_points_experiment.py (freeze/evaluate/forecast/archive/grade CLI);
+ops/week1_viewer.py (separate experimental route); ops/viewer/points.html,
+points.js, points.css; tests/test_season_points.py, test_season_points_experiment.py;
+docs/reports/2026-10-10-points-experiment-spec.md and points-evaluation.md;
+tasks/todo.md appended section only. Include reconciliation report unchanged.
+All raw inputs, models, predictions, captures and scorecards stay outside Git.
+
+Re-plan after first comparison: saved schedule has 24 null future kickoffs, so
+the first live sheet failed before any archive. Correct null sorting/rendering
+under points-ridge-v1.1, preserve v1 declaration/results, and verify identical
+historical predictions/metrics. No statistical features, parameters or gate tuned.
+
+Storage re-plan: two archive attempts failed before publication with ENOSPC;
+read full forecast→write_once path. Full saved view is234MB; helper allocates a
+temporary copy even for an existing identical object. Do not change that shared
+helper/worker. v1.2 retains only exact points schedule/outcome input fields and
+parent-view SHA in a compact immutable source projection; all model definitions
+stay identical. Keep v1/v1.1 declarations/results; no archives were created there.
+
+- [x] Freeze targets, baselines, features/windows/shrinkage, chronological folds,
+      intervals, paired 2% gate, and future-100 eligibility/grading before comparisons.
+      Pre-freeze review refinement: HFA includes the 2015 warmup year; correct the
+      specification. Reject conflicting same-version outcomes, preserve source bytes
+      before archiving, and make interrupted evaluation reuse original timestamps.
+- [x] Implement prior-game features and two Ridge candidates; test leakage,
+      boundaries, neutral/sign/missing behavior and calibration cutoffs.
+- [x] Run fixed season-forward paired evaluation with week uncertainty; save
+      reports, commands, exclusions and artifact hashes; report failed gates.
+- [x] Build small responsive experimental sheet, immutable future-only archives,
+      read-only descriptive grading and separate timestamped-market evidence.
+- [ ] Verify desktop/mobile and official forecast contracts; review scoped changes,
+      secret/private-data checks, commit/push only milestone files; verify remote SHA.
+
+Verified before commit: v1.2 exactly reproduces v1 statistics; margin gate PASS
+(3.14% MAE improvement), total FAIL (0.60%). 23/100 future games archived,
+zero eligible finals. 29 points/viewer and197 official tests pass; fullsuite
+1,381 passed/4 pre-existing failures/1 skipped, with same failures reproduced
+without milestone files. Desktop/mobile/reload/stale/unavailable checked.
+11,457 protected files unchanged; worker793/viewer789 not restarted.
+Evaluation/spec/commands/hashes saved; all private artifacts stay outsideGit.

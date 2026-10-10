@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Experimental points · NFL forecasts</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/points.css" />
+    <script defer src="/points.js"></script>
+  </head>
+  <body>
+    <header>
+      <a class="brand" href="/"
+        >NFL forecasts<span>Experimental points</span></a
+      >
+      <nav aria-label="Main navigation">
+        <a href="/">Games</a
+        ><a href="/experimental" aria-current="page">Experimental points</a>
+        <button id="refresh" type="button">Reload saved data</button>
+      </nav>
+    </header>
+    <main id="points" aria-live="polite">
+      <p class="loading">Loading saved experimental forecasts…</p>
+    </main>
+    <footer>
+      Final scores include overtime. Official winner probabilities are
+      unchanged. Local preview only; future collection uses standalone forecast
+      runs.
+    </footer>
+  </body>
+</html>
